@@ -194,7 +194,8 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 		job := Job{
 			RunID: res.RunID, MonitorID: res.MonitorID,
 			OwnerID: res.OwnerID, SegmentID: res.SegmentID,
-			Sequence: res.Sequence, Epoch: res.Epoch, SlotAt: res.SlotAt,
+			Sequence: res.Sequence, Epoch: res.Epoch, Generation: res.Generation,
+			SlotAt: res.SlotAt,
 			Target: checker.Target{
 				MonitorID:      res.MonitorID,
 				URL:            cand.TargetURL,

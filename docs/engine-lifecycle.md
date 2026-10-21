@@ -58,10 +58,41 @@ SelectDue (bounded, next_check_at <= now, no active run, not paused/deleted)
   mutation and a finalize serialize on those rows; whichever commits
   first wins, the loser is fenced.
 
+## Ordered shutdown
+
+`Engine.Shutdown(ctx)` runs a fixed, deadline-bounded sequence
+(`internal/engine/shutdown.go`), wired in `cmd/api` after the HTTP
+drain:
+
+1. **Readiness false + stop admission** — always first; `/health/ready`
+   reports unavailable before any drain begins.
+2. **Scheduler loop exits, then jobs closes** — the tick goroutine is
+   the sole job producer; `CloseJobs` only happens after it has fully
+   exited, so nothing can enqueue into a closed channel.
+3. **Bounded worker drain, then cancel** — in-flight attempts finish
+   within the deadline; a forced deadline cancels the worker context.
+   A worker that ignores cancellation is abandoned after a last-resort
+   grace — its send drops on the dead context (the results channel is
+   never closed, so no send-on-closed is possible).
+4. **Result drain within budget** — the coordinator waits the worker
+   WaitGroup before result consumption ends; buffered leftovers
+   finalize inside the remaining budget, or their reservations simply
+   stay `RESERVED` for the next owner's reconciliation. Uncommitted
+   work never becomes target DOWN.
+5. **Heartbeat stops, lock releases, conn closes** — last, after every
+   write settles: `Owner.Release` holds the same mutex as `Writer.Exec`,
+   so the advisory lock can never drop while a write is in flight.
+   Release uses a fresh bounded context — cleanup must run even when
+   the caller's deadline is spent.
+
+Shutdown is idempotent (`sync.Once`): concurrent and repeated signals
+observe one outcome.
+
 ## Evidence
 
-Deterministic schedules live in `recovery_integration_test.go` and
-`mutation_schedule_test.go` (crash, dual-owner, queue-full, queue
-delay, cancel-before-attempt, and every mutation barrier), gated by
-`go test -tags=integration ./internal/engine -count=1` against the
-disposable `postgres-test` database.
+Deterministic schedules live in `recovery_integration_test.go`,
+`mutation_schedule_test.go`, and `shutdown_integration_test.go`
+(crash, dual-owner, queue-full, queue delay, cancel-before-attempt,
+every mutation barrier, and ordered/forced/idempotent shutdown),
+gated by `go test -tags=integration ./internal/engine -count=1`
+against the disposable `postgres-test` database.

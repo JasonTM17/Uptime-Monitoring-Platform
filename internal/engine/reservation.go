@@ -28,14 +28,15 @@ var (
 // Reservation is a committed check_run plus the schedule state it
 // advanced --- the caller may enqueue work only AFTER Commit.
 type Reservation struct {
-	RunID     uuid.UUID
-	MonitorID uuid.UUID
-	OwnerID   uuid.UUID
-	SegmentID uuid.UUID
-	SlotAt    time.Time
-	Sequence  int64
-	Epoch     int64
-	NextDueAt time.Time
+	RunID      uuid.UUID
+	MonitorID  uuid.UUID
+	OwnerID    uuid.UUID
+	SegmentID  uuid.UUID
+	SlotAt     time.Time
+	Sequence   int64
+	Epoch      int64
+	Generation int64
+	NextDueAt  time.Time
 }
 
 // ReserveRun durably commits one run for monitorID inside a single
@@ -202,6 +203,6 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 	return &Reservation{
 		RunID: runID, MonitorID: monitorID, OwnerID: ownerID,
 		SegmentID: segID, SlotAt: slotAt, Sequence: seq,
-		Epoch: epoch, NextDueAt: advanceTo,
+		Epoch: epoch, Generation: gen, NextDueAt: advanceTo,
 	}, nil
 }

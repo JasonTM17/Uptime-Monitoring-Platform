@@ -27,6 +27,15 @@ TEST_DATABASE_URL="postgres://uptime_test:<pw>@127.0.0.1:54330/uptime_test?sslmo
   go test -count=1 -tags=integration ./internal/auth/
 ```
 
+Multi-package integration runs share the ONE disposable database:
+`go test` executes package binaries in parallel by default, and the
+suites delete/seed shared tables. Always serialize with `-p 1`:
+
+```sh
+go test -p 1 -count=1 -tags=integration \
+  ./internal/engine ./internal/incident ./internal/notification
+```
+
 ## OpenAPI contract gate
 
 `docs/api/openapi.yaml` (3.1.1) is checked by a pinned toolchain under

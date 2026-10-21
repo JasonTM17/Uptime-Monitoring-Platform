@@ -88,6 +88,8 @@ func AcquireOwner(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (*Own
 // connection. After Release the Owner is dead --- callers must not
 // reuse it; re-acquisition always produces a new epoch.
 func (o *Owner) Release(ctx context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if o.conn == nil {
 		return nil
 	}

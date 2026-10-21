@@ -14,14 +14,15 @@ import (
 // TargetTimeout, NOT a deadline computed at enqueue time — a job that
 // waits in the queue still gets its full check budget (F01).
 type Job struct {
-	RunID     uuid.UUID
-	MonitorID uuid.UUID
-	OwnerID   uuid.UUID
-	SegmentID uuid.UUID
-	Sequence  int64
-	Epoch     int64
-	SlotAt    time.Time
-	Target    checker.Target
+	RunID      uuid.UUID
+	MonitorID  uuid.UUID
+	OwnerID    uuid.UUID
+	SegmentID  uuid.UUID
+	Sequence   int64
+	Epoch      int64
+	Generation int64
+	SlotAt     time.Time
+	Target     checker.Target
 }
 
 // Result preserves the job identity with the checker's observation —

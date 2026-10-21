@@ -9,14 +9,19 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/engine"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/monitor"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/notification"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/logger"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func main() {
@@ -99,7 +104,42 @@ func run() error {
 		Logger:      log,
 	})
 
-	srv := httpserver.New(cfg, log, database.Ping(pool),
+	// Engine: dedicated owner conn + assembled lifecycle. A start
+	// failure is NOT fatal — another instance may legitimately hold
+	// the advisory lock, and the API still serves. When an engine
+	// runs, readiness requires both the DB ping and a live owner.
+	var eng *engine.Engine
+	if engConn, err := pgx.Connect(ctx, cfg.Database.EngineURL); err != nil {
+		log.Error("engine conn failed; checks will not run", "err", err)
+	} else if e, err := engine.StartEngine(ctx, engConn, uuid.New(),
+		engine.EngineParams{
+			TickEvery:  cfg.Engine.CheckInterval,
+			BatchLimit: cfg.Engine.QueueSize,
+			Workers:    cfg.Engine.Workers,
+			QueueSize:  cfg.Engine.QueueSize,
+			Caps: engine.AdmissionCaps{
+				OwnerPer60s:  cfg.Admission.OwnerPer60s,
+				GlobalPer60s: cfg.Admission.GlobalPer60s,
+			},
+			HeartbeatEvery:  5 * time.Second,
+			FinalizeTimeout: cfg.Database.QueryTimeout,
+		}, checker.NewChecker(checker.SystemResolver{})); err != nil {
+		log.Error("engine start failed; checks will not run", "err", err)
+		_ = engConn.Close(ctx)
+	} else {
+		eng = e
+	}
+	ready := func(ctx context.Context) error {
+		if err := database.Ping(pool)(ctx); err != nil {
+			return err
+		}
+		if eng != nil {
+			return eng.Ready(ctx)
+		}
+		return nil
+	}
+
+	srv := httpserver.New(cfg, log, ready,
 		httpserver.Mount{Pattern: "/auth/", Handler: authHandler.Mux()},
 		// Both the bare collection and the subtree mount so POST
 		// /monitors never hits a ServeMux trailing-slash redirect.
@@ -107,5 +147,17 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()},
 		httpserver.Mount{Pattern: "/notification-channels", Handler: chanHandler.Mux()},
 		httpserver.Mount{Pattern: "/notification-channels/", Handler: chanHandler.Mux()})
-	return srv.Run(ctx)
+	err = srv.Run(ctx)
+	// HTTP drained first, then the engine's own ordered stop:
+	// readiness flips inside Shutdown before its worker/finalize
+	// drain — bounded by the same shutdown timeout.
+	if eng != nil {
+		sctx, cancel := context.WithTimeout(context.Background(),
+			cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+		if serr := eng.Shutdown(sctx); serr != nil {
+			log.Error("engine shutdown incomplete", "err", serr)
+		}
+	}
+	return err
 }
