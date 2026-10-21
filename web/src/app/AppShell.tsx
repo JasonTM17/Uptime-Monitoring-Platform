@@ -19,6 +19,7 @@ const adminNav: NavItem[] = [
   { to: "/admin", label: "Overview", end: true },
   { to: "/admin/users", label: "Users" },
   { to: "/admin/roles", label: "Roles" },
+  { to: "/admin/monitors", label: "Monitors" },
   { to: "/admin/operations", label: "Operations" },
   { to: "/admin/outbox", label: "Outbox" },
   { to: "/admin/audit", label: "Audit" },

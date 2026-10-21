@@ -8,6 +8,11 @@ import { OverviewPage } from "../features/admin/OverviewPage";
 import { UsersPage } from "../features/admin/identity/UsersPage";
 import { UserDetailPage } from "../features/admin/identity/UserDetailPage";
 import { RolesPage } from "../features/admin/identity/RolesPage";
+import { AuditDetailPage } from "../features/admin/operations/AuditDetailPage";
+import { AuditPage } from "../features/admin/operations/AuditPage";
+import { GlobalMonitorsPage } from "../features/admin/operations/GlobalMonitorsPage";
+import { OperationsPage } from "../features/admin/operations/OperationsPage";
+import { OutboxPage } from "../features/admin/operations/OutboxPage";
 import { MonitorDetailPage } from "../features/monitors/MonitorDetailPage";
 import { MonitorsPage } from "../features/monitors/MonitorsPage";
 import { LoginPage } from "../features/auth/LoginPage";
@@ -92,6 +97,46 @@ export function App() {
             element={
               <RequireAdmin>
                 <RolesPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/monitors"
+            element={
+              <RequireAdmin>
+                <GlobalMonitorsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/operations"
+            element={
+              <RequireAdmin>
+                <OperationsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/outbox"
+            element={
+              <RequireAdmin>
+                <OutboxPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/audit"
+            element={
+              <RequireAdmin>
+                <AuditPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/audit/:id"
+            element={
+              <RequireAdmin>
+                <AuditDetailPage />
               </RequireAdmin>
             }
           />

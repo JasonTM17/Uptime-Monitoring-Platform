@@ -1595,8 +1595,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_generation, reason]
+              properties:
+                expected_generation: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        '200': { description: Monitor paused; generation bumped }
+        '200':
+          description: Monitor paused; generation bumped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminMonitorActionResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1612,8 +1632,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_generation, reason]
+              properties:
+                expected_generation: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        '200': { description: Monitor resumed; generation bumped }
+        '200':
+          description: Monitor resumed; generation bumped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminMonitorActionResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1629,8 +1669,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version, reason]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        '202': { description: Head re-armed PENDING with a fresh attempt budget }
+        '202':
+          description: Head re-armed PENDING with a fresh attempt budget
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminDeliveryRetryResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1646,8 +1706,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version, reason]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        '202': { description: Head plus live descendants terminalized SUPPRESSED }
+        '202':
+          description: Head plus live descendants terminalized SUPPRESSED
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminDeliverySuppressResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1970,7 +2050,10 @@ components:
         subject_id: { type: string }
         reason: { type: string }
         outcome: { type: string }
-        diff: { type: object }
+        diff:
+          type: object
+          additionalProperties: true
+          description: safe_diff — redacted before/after JSON written at audit time.
         request_id: { type: string }
         created_at: { type: string, format: date-time }
     AdminAuditPage:
@@ -2046,6 +2129,25 @@ components:
           properties:
             last_bucket: { type: [string, "null"], format: date-time }
             freshness: { type: string, enum: [fresh, stale, absent] }
+    AdminMonitorActionResult:
+      type: object
+      properties:
+        monitor_id: { type: string, format: uuid }
+        is_paused: { type: boolean }
+        generation: { type: integer }
+        already: { type: boolean }
+    AdminDeliveryRetryResult:
+      type: object
+      properties:
+        delivery_id: { type: string, format: uuid }
+        state: { type: string, enum: [PENDING] }
+        version: { type: integer }
+    AdminDeliverySuppressResult:
+      type: object
+      properties:
+        delivery_id: { type: string, format: uuid }
+        state: { type: string, enum: [SUPPRESSED] }
+        rows_suppressed: { type: integer }
     SessionDTO:
       type: object
       required: [id, device_label, created_at, last_seen_at, expires_at, current]

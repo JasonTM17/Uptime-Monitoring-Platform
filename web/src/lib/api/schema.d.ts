@@ -1101,7 +1101,10 @@ export interface components {
             subject_id: string;
             reason?: string;
             outcome: string;
-            diff?: Record<string, never>;
+            /** @description safe_diff — redacted before/after JSON written at audit time. */
+            diff?: {
+                [key: string]: unknown;
+            };
             request_id: string;
             /** Format: date-time */
             created_at: string;
@@ -1174,6 +1177,27 @@ export interface components {
                 /** @enum {string} */
                 freshness?: "fresh" | "stale" | "absent";
             };
+        };
+        AdminMonitorActionResult: {
+            /** Format: uuid */
+            monitor_id?: string;
+            is_paused?: boolean;
+            generation?: number;
+            already?: boolean;
+        };
+        AdminDeliveryRetryResult: {
+            /** Format: uuid */
+            delivery_id?: string;
+            /** @enum {string} */
+            state?: "PENDING";
+            version?: number;
+        };
+        AdminDeliverySuppressResult: {
+            /** Format: uuid */
+            delivery_id?: string;
+            /** @enum {string} */
+            state?: "SUPPRESSED";
+            rows_suppressed?: number;
         };
         SessionDTO: {
             /** Format: uuid */
@@ -3524,14 +3548,25 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_generation: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Monitor paused; generation bumped */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminMonitorActionResult"];
+                    };
+                };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AdminForbidden"];
@@ -3561,14 +3596,25 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_generation: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Monitor resumed; generation bumped */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminMonitorActionResult"];
+                    };
+                };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AdminForbidden"];
@@ -3604,14 +3650,25 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Head re-armed PENDING with a fresh attempt budget */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminDeliveryRetryResult"];
+                    };
+                };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AdminForbidden"];
@@ -3647,14 +3704,25 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Head plus live descendants terminalized SUPPRESSED */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminDeliverySuppressResult"];
+                    };
+                };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AdminForbidden"];
