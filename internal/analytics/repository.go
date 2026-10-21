@@ -158,7 +158,7 @@ func (r *Repository) ListIncidents(ctx context.Context, monID uuid.UUID,
 // the represented window is computed against. Nil means no data.
 func (r *Repository) RetentionBounds(ctx context.Context,
 	monID uuid.UUID) (rawFrom *time.Time, hourlyFrom *time.Time,
-	err error) {
+	segFrom *time.Time, err error) {
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	// A run without an accepted result (STALE/INTERRUPTED) is still
@@ -166,14 +166,22 @@ func (r *Repository) RetentionBounds(ctx context.Context,
 	if err = r.pool.QueryRow(ctx, `
 		SELECT min(slot_at) FROM uptime.check_runs
 		WHERE monitor_id=$1`, monID).Scan(&rawFrom); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err = r.pool.QueryRow(ctx, `
 		SELECT min(bucket_start) FROM uptime.hourly_stats
 		WHERE monitor_id=$1`, monID).Scan(&hourlyFrom); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return rawFrom, hourlyFrom, nil
+	// Segments are denominator evidence: a window whose runs are all
+	// purged but whose schedule survives is still representable as
+	// all-missed.
+	if err = r.pool.QueryRow(ctx, `
+		SELECT min(starts_at) FROM uptime.schedule_segments
+		WHERE monitor_id=$1`, monID).Scan(&segFrom); err != nil {
+		return nil, nil, nil, err
+	}
+	return rawFrom, hourlyFrom, segFrom, nil
 }
 
 // HourlyCounts sums complete buckets — buckets fully inside [ds,de)

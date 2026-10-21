@@ -186,7 +186,7 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 		return res, fmt.Errorf("%w: empty range", ErrWindow)
 	}
 
-	rawFrom, hourFrom, err := s.repo.RetentionBounds(ctx, monID)
+	rawFrom, hourFrom, segFrom, err := s.repo.RetentionBounds(ctx, monID)
 	if err != nil {
 		return res, err
 	}
@@ -229,6 +229,15 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 		}
 		if earliest.IsZero() || edge.Before(earliest) {
 			earliest = edge
+		}
+	}
+	// Schedule segments are durable denominator evidence: the window
+	// remains representable (as all-missed) even when every run was
+	// purged. Only a window that intersects NO retained evidence and
+	// NO segment is unrepresentable.
+	if segFrom != nil && segFrom.Before(we) {
+		if earliest.IsZero() || segFrom.Before(earliest) {
+			earliest = *segFrom
 		}
 	}
 

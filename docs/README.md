@@ -22,6 +22,8 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
+- [Sampled statistics](architecture/statistics.md): denominator
+  partition, raw+hourly merge, represented-window contract.
   reservation → attempt → atomic finalize pipeline, failure-boundary
   semantics và fencing invariants.
 
