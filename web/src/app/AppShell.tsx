@@ -36,11 +36,11 @@ export function AppShell() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-border bg-container px-4 py-2">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span className="font-mono text-sm font-semibold tracking-wide">
             UPTIME CONSOLE
           </span>
-          <nav aria-label="Primary" className="flex gap-1">
+          <nav aria-label="Primary" className="flex flex-wrap gap-1">
             {ownNav.map((l) => (
               <NavLink key={l.to} to={l.to} end={l.end} className={linkClass}>
                 {l.label}
@@ -51,7 +51,7 @@ export function AppShell() {
             <nav
               aria-label="Administration"
               data-scope="global"
-              className="flex gap-1 border-l border-border pl-4"
+              className="flex flex-wrap gap-1 border-l border-border pl-4"
             >
               {adminNav.map((l) => (
                 <NavLink key={l.to} to={l.to} end={l.end} className={linkClass}>
@@ -60,8 +60,8 @@ export function AppShell() {
               ))}
             </nav>
           )}
-          <div className="ml-auto flex items-center gap-3 text-sm">
-            <span className="text-fg-muted">{user?.email}</span>
+          <div className="ml-auto flex min-w-0 items-center gap-3 text-sm">
+            <span className="max-w-40 truncate text-fg-muted">{user?.email}</span>
             <button
               type="button"
               onClick={() => void logout()}

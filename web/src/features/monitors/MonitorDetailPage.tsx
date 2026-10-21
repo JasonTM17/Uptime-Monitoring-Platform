@@ -4,6 +4,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { HealthBadge } from "../../components/HealthBadge";
 import { ApiError } from "../../lib/api/client";
 import { useSession } from "../auth/session";
+import { AvailabilityPanel } from "../monitor-detail/AvailabilityPanel";
+import { ChecksTable } from "../monitor-detail/ChecksTable";
+import { StatsPanel } from "../monitor-detail/StatsPanel";
 import { DeleteMonitorDialog } from "./DeleteMonitorDialog";
 import { MonitorActions, useActionGuard } from "./MonitorActions";
 import { MonitorForm, type MonitorFormValues } from "./MonitorForm";
@@ -232,6 +235,10 @@ export function MonitorDetailPage() {
               </fieldset>
             )}
           </section>
+
+          <StatsPanel monitorId={m.id} />
+          <AvailabilityPanel monitorId={m.id} />
+          <ChecksTable monitorId={m.id} />
 
           <DeleteMonitorDialog
             name={m.name}
