@@ -34,8 +34,12 @@ func New(cfg config.Config, log *slog.Logger, ready ReadyProbe) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.handleLive)
 	mux.HandleFunc("GET /health/ready", s.handleReady)
+	handler := RequestID(cfg.HTTP.RequestIDMaxLen)(
+		Recover(log)(
+			AccessLog(log)(
+				NoStore(mux))))
 	s.server = &http.Server{
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTP.ReadTimeout,
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
