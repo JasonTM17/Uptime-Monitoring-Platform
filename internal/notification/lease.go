@@ -85,7 +85,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 	// racing ACK.)
 	if _, err := tx.Exec(ctx, `
 		UPDATE uptime.notification_outbox c
-		SET state='SUPPRESSED', last_error_code='OPERATOR_SUPPRESSED',
+		SET state='SUPPRESSED', last_error_code='CASCADE_SUPPRESSED',
 		    version=c.version+1
 		FROM uptime.notification_outbox p
 		WHERE c.predecessor_id=p.id AND p.state='SUPPRESSED'

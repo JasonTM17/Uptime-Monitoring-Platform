@@ -415,10 +415,18 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 				return Monitor{}, err
 			}
 			// An interval change is a cadence boundary: the old
-			// segment closes at the edit instant so history keeps its
-			// own interval and the gap to the next reserve is not
-			// scheduled under either cadence.
+			// segment closes at the edit instant (slots owed before
+			// it stay honestly missed under the old grid), and
+			// next_check_at resets to the edit instant so the
+			// successor segment never re-covers that window under
+			// the new cadence.
 			if in.IntervalSeconds != m.IntervalSeconds {
+				if _, err := tx.Exec(ctx, `
+					UPDATE uptime.monitors
+					SET next_check_at=clock_timestamp()
+					WHERE id=$1`, id); err != nil {
+					return Monitor{}, err
+				}
 				if _, err := tx.Exec(ctx, `
 				UPDATE uptime.schedule_segments
 				SET ends_at=clock_timestamp()

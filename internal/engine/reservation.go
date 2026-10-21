@@ -174,9 +174,15 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 		WHERE monitor_id=$1 AND ends_at IS NULL`, monitorID).
 		Scan(&segID, &segGen)
 	if err == nil && segGen != gen {
+		// Hand the coverage boundary off at the first owed slot, not
+		// the reserve instant: the old grid's lattice ends before D
+		// and the new segment below starts at D — contiguous, with
+		// no slot counted by both grids.
 		if _, cerr := tx.Exec(ctx, `
-			UPDATE uptime.schedule_segments SET ends_at=clock_timestamp()
-			WHERE id=$1`, segID); cerr != nil {
+			UPDATE uptime.schedule_segments s
+			SET ends_at=LEAST(clock_timestamp(), m.next_check_at)
+			FROM uptime.monitors m
+			WHERE s.id=$1 AND m.id=s.monitor_id`, segID); cerr != nil {
 			return nil, cerr
 		}
 		err = pgx.ErrNoRows

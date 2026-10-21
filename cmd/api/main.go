@@ -150,32 +150,83 @@ func run() error {
 	} else {
 		eng = e
 	}
-	// Delivery pipeline (Phase 06): the engine's finalize commits the
-	// durable intent; these loops carry it to the provider and keep
-	// the analytic lanes current. One dedicated conn per goroutine —
-	// pgx.Conn is not goroutine-safe. Janitor cadences are fixed spec
-	// constants; only the whole feature is env-gated.
+	// Maintenance loops (Phase 06): rollup + retention + lease
+	// reclaim are always-on duties — gating them behind the
+	// notification flag would silently void the retention contract
+	// in the default configuration. The dispatcher alone is gated:
+	// without a keyring+token no delivery can legitimately send.
+	// One dedicated conn per goroutine — pgx.Conn is not goroutine-safe.
+	// Liveness: readiness pings each loop's conn — a dropped conn
+	// (pgx.Conn never reconnects) flips /ready honest instead of a
+	// permanently silent dead loop.
 	var bgCancel context.CancelFunc
 	var bgWG sync.WaitGroup
+	var dispConn, janConn *pgx.Conn
+	var disp *notification.Dispatcher
+	bgCtx, bgCancelFn := context.WithCancel(context.Background())
+	bgCancel = bgCancelFn
+
+	leaseCfg := notification.LeaseConfig{
+		Batch:       10,
+		LeaseFor:    90 * time.Second, // > Batch*SendTimeout + ACK margin
+		MaxAttempts: notification.DefaultRetryPolicy.MaxAttempts,
+	}
+
+	if jconn, jerr := pgx.Connect(ctx, cfg.Database.URL); jerr != nil {
+		log.Error("janitor conn failed; rollup/retention off", "err", jerr)
+	} else {
+		janConn = jconn
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			defer janConn.Close(context.Background())
+			reclaim := time.NewTicker(30 * time.Second)
+			rollup := time.NewTicker(60 * time.Second)
+			retain := time.NewTicker(time.Hour)
+			defer reclaim.Stop()
+			defer rollup.Stop()
+			defer retain.Stop()
+			for {
+				select {
+				case <-bgCtx.Done():
+					return
+				case <-reclaim.C:
+					_, err := notification.ReclaimExpired(bgCtx, janConn, leaseCfg)
+					if err != nil {
+						log.Error("lease reclaim failed", "err", err)
+					}
+				case <-rollup.C:
+					_, err := analytics.RollupUntilQuiet(bgCtx, pool,
+						analytics.RollupConfig{Batch: 500})
+					if err != nil {
+						log.Error("rollup failed", "err", err)
+					}
+				case <-retain.C:
+					_, err := analytics.RunRetention(bgCtx, pool,
+						analytics.RetentionConfig{
+							RawRetentionHours:   rawHours,
+							HourlyRetentionDays: 30,
+							OutboxRetentionDays: 30,
+							Batch:               500,
+						}, time.Now())
+					if err != nil {
+						log.Error("retention failed", "err", err)
+					}
+				}
+			}
+		}()
+	}
+
 	if cfg.Notify.Enabled {
 		if ring, kerr := notification.ParseKeyring(
 			cfg.Notify.KeyringRead, cfg.Notify.KeyringWriteV); kerr != nil {
 			log.Error("notification keyring invalid; delivery off", "err", kerr)
-		} else if dispConn, derr := pgx.Connect(ctx, cfg.Database.URL); derr != nil {
+		} else if dconn, derr := pgx.Connect(ctx, cfg.Database.URL); derr != nil {
 			log.Error("dispatcher conn failed; delivery off", "err", derr)
-		} else if janConn, jerr := pgx.Connect(ctx, cfg.Database.URL); jerr != nil {
-			log.Error("janitor conn failed; delivery off", "err", jerr)
-			_ = dispConn.Close(context.Background())
 		} else {
+			dispConn = dconn
 			bot := cfg.Notify.BotToken
-			bgCtx, cancel := context.WithCancel(context.Background())
-			bgCancel = cancel
-			leaseCfg := notification.LeaseConfig{
-				Batch:       10,
-				LeaseFor:    90 * time.Second, // > Batch*SendTimeout + ACK margin
-				MaxAttempts: notification.DefaultRetryPolicy.MaxAttempts,
-			}
-			disp := notification.NewDispatcher(dispConn, chanRepo, ring,
+			disp = notification.NewDispatcher(dispConn, chanRepo, ring,
 				notification.NewTelegramSender(nil),
 				notification.DispatcherConfig{
 					Lease:       leaseCfg,
@@ -184,40 +235,11 @@ func run() error {
 					TickEvery:   time.Second,
 					BotToken:    bot,
 				}, notification.NewLimiter(30, 1, nil))
-			bgWG.Add(2)
+			bgWG.Add(1)
 			go func() {
 				defer bgWG.Done()
 				defer dispConn.Close(context.Background())
 				_ = disp.Run(bgCtx)
-			}()
-			go func() {
-				defer bgWG.Done()
-				defer janConn.Close(context.Background())
-				reclaim := time.NewTicker(30 * time.Second)
-				rollup := time.NewTicker(60 * time.Second)
-				retain := time.NewTicker(time.Hour)
-				defer reclaim.Stop()
-				defer rollup.Stop()
-				defer retain.Stop()
-				for {
-					select {
-					case <-bgCtx.Done():
-						return
-					case <-reclaim.C:
-						_, _ = notification.ReclaimExpired(bgCtx, janConn, leaseCfg)
-					case <-rollup.C:
-						_, _ = analytics.RollupUntilQuiet(bgCtx, pool,
-							analytics.RollupConfig{Batch: 500})
-					case <-retain.C:
-						_, _ = analytics.RunRetention(bgCtx, pool,
-							analytics.RetentionConfig{
-								RawRetentionHours:   rawHours,
-								HourlyRetentionDays: 30,
-								OutboxRetentionDays: 30,
-								Batch:               500,
-							}, time.Now())
-					}
-				}
 			}()
 		}
 	}
@@ -227,7 +249,22 @@ func run() error {
 			return err
 		}
 		if eng != nil {
-			return eng.Ready(ctx)
+			if err := eng.Ready(ctx); err != nil {
+				return err
+			}
+		}
+		// A dead maintenance or delivery loop is not "ready": each
+		// loop owns one conn, and pgx.Conn never reconnects — a ping
+		// failure means the loop died silently.
+		if janConn != nil {
+			if err := janConn.Ping(ctx); err != nil {
+				return fmt.Errorf("janitor conn: %w", err)
+			}
+		}
+		if dispConn != nil {
+			if err := dispConn.Ping(ctx); err != nil {
+				return fmt.Errorf("dispatcher conn: %w", err)
+			}
 		}
 		return nil
 	}

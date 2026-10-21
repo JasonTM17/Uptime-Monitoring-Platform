@@ -255,3 +255,66 @@ func TestMutationFinalizeSchedules(t *testing.T) {
 		}
 	})
 }
+
+// A non-interval mutation bumps the generation but leaves the open
+// segment stale: the next reserve must hand coverage off at the
+// FIRST OWED SLOT, not the reserve instant — old grid ends before D,
+// new grid starts at D, and no lattice point is counted by both
+// (Wukong: the old ends_at=clock_timestamp() counted D twice).
+func TestMutationHandoffContiguous(t *testing.T) {
+	ctx := context.Background()
+	conn := engineConn(t)
+	cleanEngine(t, conn)
+	o, err := AcquireOwner(ctx, conn, uuid.New())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer o.Release(ctx)
+
+	_, monID := seedDue(t)
+	r1, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
+	if err != nil {
+		t.Fatalf("reserve 1: %v", err)
+	}
+	// Free the one-active-run slot — finalize isn't under test here.
+	if _, err := conn.Exec(ctx, `
+		UPDATE uptime.check_runs SET status='EXCLUDED', finished_at=now()
+		WHERE id=$1`, r1.RunID); err != nil {
+		t.Fatal(err)
+	}
+	// Non-interval mutation: generation bump only (name edit shape).
+	if _, err := conn.Exec(ctx, `
+		UPDATE uptime.monitors SET generation=2,
+		  next_check_at=now()-interval '1 second'
+		WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := ReserveRun(ctx, conn, monID, 2, caps, o.Epoch())
+	if err != nil {
+		t.Fatalf("reserve 2: %v", err)
+	}
+	if r2.SlotAt.IsZero() {
+		t.Fatal("no slot charged")
+	}
+	var oldEnd, newStart time.Time
+	var oldCnt, newCnt int
+	if err := conn.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE ends_at IS NOT NULL),
+		       max(ends_at),
+		       count(*) FILTER (WHERE ends_at IS NULL),
+		       min(starts_at) FILTER (WHERE ends_at IS NULL)
+		FROM uptime.schedule_segments WHERE monitor_id=$1`,
+		monID).Scan(&oldCnt, &oldEnd, &newCnt, &newStart); err != nil {
+		t.Fatal(err)
+	}
+	if oldCnt != 1 || newCnt != 1 {
+		t.Fatalf("segments old=%d new=%d", oldCnt, newCnt)
+	}
+	if !oldEnd.Equal(newStart) {
+		t.Fatalf("coverage not contiguous: old ends %v new starts %v",
+			oldEnd, newStart)
+	}
+	if !newStart.Equal(r2.SlotAt) {
+		t.Fatalf("handoff %v != owed slot %v", newStart, r2.SlotAt)
+	}
+}

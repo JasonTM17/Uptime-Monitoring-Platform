@@ -127,8 +127,9 @@ type Dispatcher struct {
 	limit  *Limiter
 	rng    *rand.Rand
 
-	errMu   sync.Mutex
-	lastErr error
+	errMu       sync.Mutex
+	lastErr     error
+	faultStreak int
 
 	conn       *pgx.Conn
 	repo       *Repository
@@ -226,6 +227,25 @@ func (d *Dispatcher) noteErr(err error) {
 	d.errMu.Unlock()
 }
 
+func (d *Dispatcher) faultTick(failed bool) {
+	d.errMu.Lock()
+	if failed {
+		d.faultStreak++
+	} else {
+		d.faultStreak = 0
+	}
+	d.errMu.Unlock()
+}
+
+// FaultStreak reports consecutive failed claim ticks — a permanently
+// dead claim path (dropped conn never reconnects) surfaces as a
+// growing streak rather than silently looping forever.
+func (d *Dispatcher) FaultStreak() int {
+	d.errMu.Lock()
+	defer d.errMu.Unlock()
+	return d.faultStreak
+}
+
 // LastErr reports the most recent asynchronous failure — a failed
 // claim pass or a disposition write that left a row recoverable.
 // The row itself is never lost; the error is surfaced for operators.
@@ -268,6 +288,9 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			// before the next pass, never a busy loop; the error is
 			// still surfaced so a persistent outage is visible.
 			d.noteErr(err)
+			d.faultTick(true)
+		} else {
+			d.faultTick(false)
 		}
 		select {
 		case <-ctx.Done():
