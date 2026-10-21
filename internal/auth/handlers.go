@@ -3,9 +3,23 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"net/netip"
+	"strconv"
+	"time"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 )
+
+// sessionCookieName is the local-profile cookie (no __Host- prefix —
+// local serves plain HTTP; hosted profile sets Secure + tighter policy).
+const sessionCookieName = "uptime_session"
+
+// HandlerConfig wires transport policy into the auth handler.
+type HandlerConfig struct {
+	MaxJSONBody    int64
+	TrustedProxies []netip.Prefix // empty = trust no proxy (default)
+	CookieSecure   bool           // hosted HTTPS only; local stays false
+}
 
 // Handler exposes auth use cases over HTTP. Mux() is the router seam:
 // routes are registered in one place here so cards add handlers without
@@ -14,10 +28,13 @@ import (
 type Handler struct {
 	svc     *Service
 	maxBody int64
+	trusted []netip.Prefix
+	secure  bool
 }
 
-func NewHandler(svc *Service, maxJSONBody int64) *Handler {
-	return &Handler{svc: svc, maxBody: maxJSONBody}
+func NewHandler(svc *Service, cfg HandlerConfig) *Handler {
+	return &Handler{svc: svc, maxBody: cfg.MaxJSONBody,
+		trusted: cfg.TrustedProxies, secure: cfg.CookieSecure}
 }
 
 // Mux returns the auth route table. Every auth route lives here so the
@@ -25,7 +42,19 @@ func NewHandler(svc *Service, maxJSONBody int64) *Handler {
 func (h *Handler) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/register", h.register)
+	mux.HandleFunc("POST /auth/login", h.login)
 	return mux
+}
+
+// sessionCookie serializes the bearer token for the browser. Plaintext
+// appears only here — HttpOnly blocks script access; SameSite=Lax plus
+// the CSRF gate (C15) bound ambient use.
+func (h *Handler) sessionCookie(token string, expires time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name: sessionCookieName, Value: token, Path: "/",
+		HttpOnly: true, Secure: h.secure,
+		SameSite: http.SameSiteLaxMode, Expires: expires,
+	}
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +78,40 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 			// existing account is active/disabled.
 			httpserver.WriteError(w, r, http.StatusConflict,
 				httpserver.ErrConflict, "registration could not be completed")
+		default:
+			httpserver.WriteError(w, r, http.StatusInternalServerError,
+				httpserver.ErrInternal, "internal error")
+		}
+	}
+}
+
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	var in LoginInput
+	if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {
+		httpserver.WriteErrorFields(w, r, apiErr.Status, apiErr.Code, apiErr.Msg, apiErr.Fields)
+		return
+	}
+	iss, user, err := h.svc.Login(r.Context(), in, ClientIP(r, h.trusted))
+	switch {
+	case err == nil:
+		http.SetCookie(w, h.sessionCookie(iss.Token, iss.Session.ExpiresAt))
+		httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{
+			"user":               user,
+			"session_expires_at": iss.Session.ExpiresAt,
+		})
+	default:
+		var rl *RateLimitedError
+		switch {
+		case errors.As(err, &rl):
+			w.Header().Set("Retry-After",
+				strconv.Itoa(int(rl.RetryAfter.Seconds())+1))
+			httpserver.WriteError(w, r, http.StatusTooManyRequests,
+				httpserver.ErrRateLimited, "too many attempts")
+		case errors.Is(err, ErrBadCredentials):
+			// Uniform 401 — unknown, disabled, and wrong password are
+			// indistinguishable on the wire.
+			httpserver.WriteError(w, r, http.StatusUnauthorized,
+				httpserver.ErrUnauth, "invalid credentials")
 		default:
 			httpserver.WriteError(w, r, http.StatusInternalServerError,
 				httpserver.ErrInternal, "internal error")

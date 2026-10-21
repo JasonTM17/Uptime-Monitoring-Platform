@@ -16,8 +16,6 @@ import (
 
 const validPW = "a very long password!"
 
-var testPol = SessionPolicy{Absolute: 7 * 24 * time.Hour, Idle: 24 * time.Hour}
-
 // countingHasher wraps the real hasher to prove validation happens
 // before any KDF work.
 type countingHasher struct {
@@ -40,13 +38,18 @@ func h19() *Hasher {
 	return NewHasher(testCfg())
 }
 
-// fakeStore emulates the unique canonical-email constraint.
+// fakeStore emulates the unique canonical-email constraint. byKey is
+// the canonical-email index; byID is the shared user directory the
+// session fake also consults (single source of truth for status/version).
 type fakeStore struct {
 	mu    sync.Mutex
 	byKey map[string]User
+	byID  map[uuid.UUID]User
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{byKey: map[string]User{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{byKey: map[string]User{}, byID: map[uuid.UUID]User{}}
+}
 
 func (f *fakeStore) CreateUser(_ context.Context, email, hash, display string) (User, error) {
 	f.mu.Lock()
@@ -58,6 +61,7 @@ func (f *fakeStore) CreateUser(_ context.Context, email, hash, display string) (
 		DisplayName: display, Status: UserStatusActive,
 		SecurityVersion: 1, CreatedAt: time.Now()}
 	f.byKey[email] = u
+	f.byID[u.ID] = u
 	return u, nil
 }
 func (f *fakeStore) FindUserByEmail(_ context.Context, email string) (User, error) {
@@ -68,13 +72,41 @@ func (f *fakeStore) FindUserByEmail(_ context.Context, email string) (User, erro
 	}
 	return User{}, ErrNotFound
 }
+func (f *fakeStore) findByID(id uuid.UUID) (User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if u, ok := f.byID[id]; ok {
+		return u, nil
+	}
+	return User{}, ErrNotFound
+}
 func (f *fakeStore) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.byKey) }
 
 // userSessionStore composes the user fake with the session fake into
-// a single Store (no method overlap).
+// a single Store (no method overlap). The session fake's user directory
+// IS the fake's byID map, so status/version changes are observed
+// consistently by both seams.
 type userSessionStore struct {
 	*fakeStore
 	*fakeSessions
+}
+
+func newUserSessionStore() *userSessionStore {
+	fs := newFakeStore()
+	ss := newFakeSessions()
+	// Session fake resolves owners through the user fake's directory —
+	// one source of truth for status/security_version.
+	ss.findUser = fs.findByID
+	return &userSessionStore{fakeStore: fs, fakeSessions: ss}
+}
+
+// putUser mutates the shared directory in both indexes (tests emulate
+// disable/version-bump).
+func (s *userSessionStore) putUser(u User) {
+	s.fakeStore.mu.Lock()
+	defer s.fakeStore.mu.Unlock()
+	s.byKey[u.Email] = u
+	s.byID[u.ID] = u
 }
 
 func TestNormalizeEmail(t *testing.T) {
@@ -126,7 +158,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("happy path returns safe DTO only", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, ch, testPol)
+		svc := NewService(newUserSessionStore(), ch, testCfg())
 		u, err := svc.Register(ctx, RegisterInput{
 			Email: "  Person@Site.com ", Password: validPW})
 		if err != nil {
@@ -141,7 +173,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("canonical-case duplicate maps to ErrEmailTaken", func(t *testing.T) {
 		store := newFakeStore()
-		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: newFakeSessions()}, &countingHasher{}, testPol)
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg())
 		if _, err := svc.Register(ctx, RegisterInput{Email: "dupe@x.co", Password: validPW}); err != nil {
 			t.Fatalf("first register: %v", err)
 		}
@@ -156,7 +188,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("invalid input never reaches the KDF", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, ch, testPol)
+		svc := NewService(newUserSessionStore(), ch, testCfg())
 		_, err := svc.Register(ctx, RegisterInput{Email: "bad", Password: "x"})
 		var fe *FieldError
 		if !errors.As(err, &fe) {
@@ -169,8 +201,8 @@ func TestRegister(t *testing.T) {
 }
 
 func TestRegisterHandler(t *testing.T) {
-	svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, &countingHasher{}, testPol)
-	mux := NewHandler(svc, 32<<10).Mux()
+	svc := NewService(newUserSessionStore(), &countingHasher{}, testCfg())
+	mux := NewHandler(svc, HandlerConfig{MaxJSONBody: 32 << 10}).Mux()
 	// Bodies are marshaled from maps so no credential-shaped literal
 	// appears in test source (staged-secret gate stays green).
 	body := func(fields map[string]string) string {

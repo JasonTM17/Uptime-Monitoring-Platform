@@ -18,8 +18,7 @@ import (
 // user-lock creation, lookup validation, revoke replay rejection.
 func TestSessionRepository(t *testing.T) {
 	repo := auth.NewRepository(testPool(t), 10*time.Second)
-	svc := auth.NewService(repo, nil, auth.SessionPolicy{
-		Absolute: 7 * 24 * time.Hour, Idle: 24 * time.Hour})
+	svc := auth.NewService(repo, nil, intCfg())
 	ctx := context.Background()
 
 	u, err := repo.CreateUser(ctx, "sess@example.com", "$argon2id$fixture", "sess")

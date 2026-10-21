@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 )
 
 // Registration policy from the security spec: email is trimmed +
@@ -65,14 +67,26 @@ type SessionPolicy struct {
 // Service owns identity use cases. Constructed once at composition.
 // now is injectable for deterministic expiry tests.
 type Service struct {
-	store  Store
-	hasher PasswordHasher
-	pol    SessionPolicy
-	now    func() time.Time
+	store       Store
+	hasher      PasswordHasher
+	pol         SessionPolicy
+	ipLimiter   *attemptLimiter
+	acctLimiter *attemptLimiter
+	now         func() time.Time
 }
 
-func NewService(store Store, hasher PasswordHasher, pol SessionPolicy) *Service {
-	return &Service{store: store, hasher: hasher, pol: pol, now: time.Now}
+func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Service {
+	return &Service{
+		store:  store,
+		hasher: hasher,
+		pol: SessionPolicy{
+			Absolute: cfg.SessionAbsoluteExpiry,
+			Idle:     cfg.SessionIdleExpiry,
+		},
+		ipLimiter:   newAttemptLimiter(cfg.LoginIPAttemptsPerMin, time.Minute, cfg.LimiterMaxKeys),
+		acctLimiter: newAttemptLimiter(cfg.LoginAccountAttemptsPer15M, 15*time.Minute, cfg.LimiterMaxKeys),
+		now:         time.Now,
+	}
 }
 
 // PublicUser is the only shape that may leave the service layer — it

@@ -107,6 +107,12 @@ type AuthConfig struct {
 	// slides on authenticated activity but never past absolute).
 	SessionAbsoluteExpiry time.Duration
 	SessionIdleExpiry     time.Duration
+	// Login throttling: fixed-window attempt budgets per client IP
+	// and per canonical account, plus a hard cap on tracked keys so
+	// the limiter map itself cannot exhaust memory.
+	LoginIPAttemptsPerMin      int
+	LoginAccountAttemptsPer15M int
+	LimiterMaxKeys             int
 }
 
 // NotifyConfig gates notification delivery. The keyring contract is
@@ -188,6 +194,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envInt(lookup, errs, "AUTH_HASH_WORKERS", &cfg.Auth.HashWorkers)
 	envDuration(lookup, errs, "SESSION_ABSOLUTE_EXPIRY", &cfg.Auth.SessionAbsoluteExpiry)
 	envDuration(lookup, errs, "SESSION_IDLE_EXPIRY", &cfg.Auth.SessionIdleExpiry)
+	envInt(lookup, errs, "LOGIN_IP_ATTEMPTS_PER_MIN", &cfg.Auth.LoginIPAttemptsPerMin)
+	envInt(lookup, errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", &cfg.Auth.LoginAccountAttemptsPer15M)
+	envInt(lookup, errs, "AUTH_LIMITER_MAX_KEYS", &cfg.Auth.LimiterMaxKeys)
 
 	envInt(lookup, errs, "ENGINE_WORKERS", &cfg.Engine.Workers)
 	envInt(lookup, errs, "ENGINE_QUEUE_SIZE", &cfg.Engine.QueueSize)
@@ -325,6 +334,10 @@ func defaultAuthConfig() AuthConfig {
 		// Security contract: absolute 7d, sliding idle 24h.
 		SessionAbsoluteExpiry: 7 * 24 * time.Hour,
 		SessionIdleExpiry:     24 * time.Hour,
+		// Security contract candidates: 5/min/IP, 5/15min/account.
+		LoginIPAttemptsPerMin:      5,
+		LoginAccountAttemptsPer15M: 5,
+		LimiterMaxKeys:             10000,
 	}
 }
 
@@ -399,6 +412,9 @@ func validate(cfg *Config, errs *LoadError) {
 	if cfg.Auth.SessionIdleExpiry <= 0 || cfg.Auth.SessionIdleExpiry > cfg.Auth.SessionAbsoluteExpiry {
 		errs.add("SESSION_IDLE_EXPIRY", "must be > 0 and <= SESSION_ABSOLUTE_EXPIRY")
 	}
+	bound(errs, "LOGIN_IP_ATTEMPTS_PER_MIN", cfg.Auth.LoginIPAttemptsPerMin, 1, 1000)
+	bound(errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", cfg.Auth.LoginAccountAttemptsPer15M, 1, 1000)
+	bound(errs, "AUTH_LIMITER_MAX_KEYS", cfg.Auth.LimiterMaxKeys, 100, 1000000)
 
 	if cfg.Alloc.RetainedMonitorsOwner > cfg.Alloc.RetainedMonitorsGlobal {
 		errs.add("RETAINED_MONITORS_OWNER_LIMIT", "must be <= RETAINED_MONITORS_GLOBAL_LIMIT")

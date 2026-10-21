@@ -24,7 +24,7 @@ func TestConcurrentRegistration(t *testing.T) {
 		ArgonMemoryKiB: 19 * 1024, ArgonTime: 2, ArgonParallelism: 1,
 		ArgonSaltLen: 16, ArgonKeyLen: 32, HashWorkers: 2,
 	})
-	svc := auth.NewService(repo, hasher, auth.SessionPolicy{Absolute: 7 * 24 * time.Hour, Idle: 24 * time.Hour})
+	svc := auth.NewService(repo, hasher, intCfg())
 	ctx := context.Background()
 
 	const email = "race@concurrent.test"
@@ -78,4 +78,15 @@ func TestConcurrentRegistration(t *testing.T) {
 		t.Fatalf("expected 1 canonical row, got %d", n)
 	}
 	_ = conn.Close(ctx)
+}
+
+// intCfg returns service config for integration tests.
+func intCfg() config.AuthConfig {
+	return config.AuthConfig{
+		SessionAbsoluteExpiry:      7 * 24 * time.Hour,
+		SessionIdleExpiry:          24 * time.Hour,
+		LoginIPAttemptsPerMin:      5,
+		LoginAccountAttemptsPer15M: 5,
+		LimiterMaxKeys:             1000,
+	}
 }

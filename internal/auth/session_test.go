@@ -12,27 +12,26 @@ import (
 )
 
 // fakeSessions is an in-memory SessionStore honoring the same contract:
-// hash-keyed lookup, owner status/version join, touch, revoke.
+// hash-keyed lookup, owner status/version join via findUser (wired to
+// the fake store's single directory), touch, revoke.
 type fakeSessions struct {
-	mu     sync.Mutex
-	users  map[uuid.UUID]User
-	byHash map[string]Session
-	touchN int
+	mu       sync.Mutex
+	findUser func(uuid.UUID) (User, error)
+	byHash   map[string]Session
+	touchN   int
 }
 
 func newFakeSessions() *fakeSessions {
-	return &fakeSessions{users: map[uuid.UUID]User{}, byHash: map[string]Session{}}
+	return &fakeSessions{byHash: map[string]Session{}}
 }
-
-func (f *fakeSessions) addUser(u User) { f.users[u.ID] = u }
 
 func (f *fakeSessions) CreateSession(_ context.Context, userID uuid.UUID, hash []byte,
 	exp, idle time.Time, label string) (Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	u, ok := f.users[userID]
-	if !ok {
-		return Session{}, ErrNotFound
+	u, err := f.findUser(userID)
+	if err != nil {
+		return Session{}, err
 	}
 	if u.Status != UserStatusActive {
 		return Session{}, ErrInvalidSession
@@ -51,7 +50,11 @@ func (f *fakeSessions) FindSessionByTokenHash(_ context.Context, hash []byte) (S
 	if !ok {
 		return Session{}, User{}, ErrNotFound
 	}
-	return s, f.users[s.UserID], nil
+	u, err := f.findUser(s.UserID)
+	if err != nil {
+		return Session{}, User{}, err
+	}
+	return s, u, nil
 }
 
 func (f *fakeSessions) TouchSession(_ context.Context, id uuid.UUID, seen, idle time.Time) error {
@@ -126,13 +129,13 @@ func TestSessionToken(t *testing.T) {
 
 func sessionSvc(t *testing.T) (*Service, *userSessionStore, User) {
 	t.Helper()
-	store := &userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}
-	svc := NewService(store, &countingHasher{}, testPol)
+	store := newUserSessionStore()
+	svc := NewService(store, &countingHasher{}, testCfg())
 	u, err := store.CreateUser(context.Background(), "s@x.co", "$h", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.addUser(u)
+	store.putUser(u)
 	return svc, store, u
 }
 
@@ -186,7 +189,7 @@ func TestSessionLifecycle(t *testing.T) {
 		svc, store, u := sessionSvc(t)
 		iss, _ := svc.CreateSession(ctx, u.ID, "")
 		u.Status = UserStatusDisabled
-		store.addUser(u)
+		store.putUser(u)
 		if _, err := svc.LookupSession(ctx, iss.Token); !errors.Is(err, ErrInvalidSession) {
 			t.Fatalf("expected ErrInvalidSession, got %v", err)
 		}
@@ -196,7 +199,7 @@ func TestSessionLifecycle(t *testing.T) {
 		svc, store, u := sessionSvc(t)
 		iss, _ := svc.CreateSession(ctx, u.ID, "")
 		u.SecurityVersion++
-		store.addUser(u)
+		store.putUser(u)
 		if _, err := svc.LookupSession(ctx, iss.Token); !errors.Is(err, ErrInvalidSession) {
 			t.Fatalf("expected ErrInvalidSession, got %v", err)
 		}
@@ -205,7 +208,7 @@ func TestSessionLifecycle(t *testing.T) {
 	t.Run("cannot create session for disabled user", func(t *testing.T) {
 		svc, store, u := sessionSvc(t)
 		u.Status = UserStatusDisabled
-		store.addUser(u)
+		store.putUser(u)
 		if _, err := svc.CreateSession(ctx, u.ID, ""); !errors.Is(err, ErrInvalidSession) {
 			t.Fatalf("expected ErrInvalidSession, got %v", err)
 		}
