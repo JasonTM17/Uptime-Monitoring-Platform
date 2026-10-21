@@ -74,6 +74,8 @@ func (h *Handler) Mux() *http.ServeMux {
 	mux.HandleFunc("GET /monitors/{id}", session(h.get))
 	mux.HandleFunc("PATCH /monitors/{id}", guard(h.patch))
 	mux.HandleFunc("DELETE /monitors/{id}", guard(h.del))
+	mux.HandleFunc("POST /monitors/{id}/pause", guard(h.transition(true)))
+	mux.HandleFunc("POST /monitors/{id}/resume", guard(h.transition(false)))
 
 	// Method twins on exact paths keep 405 inside the envelope.
 	for _, path := range []string{"/monitors", "/monitors/{$}"} {
@@ -83,6 +85,11 @@ func (h *Handler) Mux() *http.ServeMux {
 	}
 	for _, method := range []string{"POST", "PUT"} {
 		mux.HandleFunc(method+" /monitors/{id}", h.methodNotAllowed("GET, PATCH, DELETE"))
+	}
+	for _, p := range []string{"/monitors/{id}/pause", "/monitors/{id}/resume"} {
+		for _, method := range []string{"GET", "PUT", "PATCH", "DELETE"} {
+			mux.HandleFunc(method+" "+p, h.methodNotAllowed("POST"))
+		}
 	}
 	mux.HandleFunc("/", h.notFound)
 	return mux
@@ -326,6 +333,46 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, toDTO(out))
+}
+
+// transition returns the pause/resume handler. The body carries only
+// expected_generation — the fence and the idempotent same-state no-op
+// live in the repository mutation, so both verbs share one shape.
+func (h *Handler) transition(paused bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := owner(r)
+		id, ok := monitorID(w, r)
+		if !ok {
+			return
+		}
+		var in generationBody
+		if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {
+			httpserver.WriteErrorFields(w, r, apiErr.Status, apiErr.Code, apiErr.Msg, apiErr.Fields)
+			return
+		}
+		if in.ExpectedGeneration < 1 {
+			httpserver.WriteErrorFields(w, r, http.StatusUnprocessableEntity,
+				httpserver.ErrValidation, "validation failed",
+				map[string]string{"expected_generation": "required"})
+			return
+		}
+		var out Monitor
+		var err error
+		err = h.auth.WithActorLock(r.Context(), p, func(tx pgx.Tx, u auth.User) error {
+			var cerr error
+			if paused {
+				out, cerr = h.svc.PauseTx(r.Context(), tx, u.ID, id, in.ExpectedGeneration)
+			} else {
+				out, cerr = h.svc.ResumeTx(r.Context(), tx, u.ID, id, in.ExpectedGeneration)
+			}
+			return cerr
+		})
+		if err != nil {
+			h.writeMonitorError(w, r, err)
+			return
+		}
+		httpserver.WriteJSON(w, r, http.StatusOK, toDTO(out))
+	}
 }
 
 func (h *Handler) del(w http.ResponseWriter, r *http.Request) {

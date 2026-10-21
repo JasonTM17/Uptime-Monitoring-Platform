@@ -155,10 +155,6 @@ func (s *Service) Delete(ctx context.Context, ownerID, id uuid.UUID, gen int64) 
 	return s.store.SoftDeleteMonitor(ctx, ownerID, id, gen)
 }
 
-func (s *Service) SetPausedTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, gen int64, paused bool) (Monitor, error) {
-	return s.tx.SetMonitorPausedTx(ctx, tx, ownerID, id, gen, paused)
-}
-
 func (s *Service) DeleteTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, gen int64) error {
 	return s.tx.SoftDeleteMonitorTx(ctx, tx, ownerID, id, gen)
 }

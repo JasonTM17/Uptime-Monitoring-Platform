@@ -419,6 +419,12 @@ func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID,
 	expectedGen int64, paused bool) (Monitor, error) {
 	return r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
 		func(tx pgx.Tx, m Monitor) (Monitor, error) {
+			// Idempotent command: already in the requested state is a
+			// no-op success — no second generation bump, no write. A
+			// stale expected_generation still conflicts above.
+			if m.IsPaused == paused {
+				return m, nil
+			}
 			var q string
 			if paused {
 				q = `UPDATE uptime.monitors SET is_paused=true,

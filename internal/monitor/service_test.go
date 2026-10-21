@@ -67,6 +67,14 @@ func (f *fakeStore) SetMonitorPaused(_ context.Context, ownerID, id uuid.UUID, g
 	if !ok || m.UserID != ownerID || m.DeletedAt != nil {
 		return Monitor{}, ErrMonitorNotFound
 	}
+	if m.Generation != gen {
+		return Monitor{}, ErrGenerationConflict
+	}
+	if m.IsPaused == paused {
+		f.monitors[id] = m // idempotent: no generation bump
+		f.gotGen = gen
+		return m, nil
+	}
 	m.IsPaused, m.Generation = paused, m.Generation+1
 	f.monitors[id] = m
 	f.gotGen = gen

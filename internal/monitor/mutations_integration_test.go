@@ -381,3 +381,132 @@ func mustUUID(t *testing.T, s string) uuid.UUID {
 	}
 	return id
 }
+
+func TestPauseResume(t *testing.T) {
+	f := newMonFixture(t)
+	defer f.cleanup()
+	a := f.newClient()
+	a.join(f.email("lc"))
+	m := a.create("lc-target")
+	id := m["id"].(string)
+
+	t.Run("pause 200 preserves health, bumps generation", func(t *testing.T) {
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/pause",
+			`{"expected_generation":1}`, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pause %d %s", rec.Code, rec.Body.String())
+		}
+		var env struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.Data["is_paused"] != true || env.Data["health"] != "UNKNOWN" ||
+			env.Data["generation"].(float64) != 2 {
+			t.Fatalf("pause state %+v", env.Data)
+		}
+	})
+
+	t.Run("repeated pause with current gen is idempotent 200", func(t *testing.T) {
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/pause",
+			`{"expected_generation":2}`, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("re-pause %d", rec.Code)
+		}
+		var env struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.Data["generation"].(float64) != 2 {
+			t.Fatalf("re-pause bumped generation to %v", env.Data["generation"])
+		}
+	})
+
+	t.Run("resume marks eligibility without fabricating sample", func(t *testing.T) {
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/resume",
+			`{"expected_generation":2}`, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resume %d %s", rec.Code, rec.Body.String())
+		}
+		var env struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		d := env.Data
+		if d["is_paused"] != false || d["health"] != "UNKNOWN" ||
+			d["last_checked_at"] != nil || d["last_response_time_ms"] != nil {
+			t.Fatalf("resume fabricated %+v", d)
+		}
+		if d["generation"].(float64) != 3 {
+			t.Fatalf("resume generation %v", d["generation"])
+		}
+	})
+
+	t.Run("stale generation 409 on lifecycle", func(t *testing.T) {
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/pause",
+			`{"expected_generation":1}`, true)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("stale pause %d", rec.Code)
+		}
+	})
+
+	t.Run("foreign pause reads as 404", func(t *testing.T) {
+		b := f.newClient()
+		b.join(f.email("lc-b"))
+		rec := b.do(http.MethodPost, "/monitors/"+id+"/pause",
+			`{"expected_generation":3}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("foreign pause %d", rec.Code)
+		}
+	})
+}
+
+func TestConcurrentLifecycle(t *testing.T) {
+	f := newMonFixture(t)
+	defer f.cleanup()
+	a := f.newClient()
+	a.join(f.email("lcc"))
+	m := a.create("lcc-target")
+	id := m["id"].(string)
+
+	// pause-vs-edit on the same generation must serialize: exactly one
+	// winner commits generation 2, losers get 409.
+	const racers = 4
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	codes := make([]int, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				codes[i] = a.do(http.MethodPost, "/monitors/"+id+"/pause",
+					`{"expected_generation":1}`, true).Code
+			} else {
+				codes[i] = a.do(http.MethodPatch, "/monitors/"+id,
+					fmt.Sprintf(`{"expected_generation":1,"name":"e%d"}`, i), true).Code
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	wins := 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusOK:
+			wins++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("unexpected code %d in %v", c, codes)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("codes %v — want exactly one winner", codes)
+	}
+}
