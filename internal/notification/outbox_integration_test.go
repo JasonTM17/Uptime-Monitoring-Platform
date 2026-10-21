@@ -195,17 +195,27 @@ func TestOutboxPredecessor(t *testing.T) {
 	if recs[0].PredecessorID == nil || *recs[0].PredecessorID != downs[0].ID {
 		t.Fatalf("predecessor not linked: %+v", recs[0])
 	}
-	// Recovery without any DOWN: null predecessor, still persists.
+	// Recovery without any DOWN intent is skipped outright — the
+	// incident's channel set is frozen at DOWN; a channel bound or
+	// verified mid-incident must never receive a standalone
+	// "recovered".
 	f2 := seedBase(t, c)
 	mkChannel(t, c, f2, "VERIFIED", true, true)
 	tx, _ = c.Begin(ctx)
 	orphan, err := AppendTransitionDeliveries(ctx, tx, tinput(f2, EventRecovery))
-	if err != nil || len(orphan) != 1 {
+	if err != nil {
 		t.Fatal(err)
 	}
 	tx.Commit(ctx)
-	if orphan[0].PredecessorID != nil {
-		t.Fatal("orphan recovery fabricated a predecessor")
+	if len(orphan) != 0 {
+		t.Fatalf("orphan recovery persisted: %+v", orphan)
+	}
+	var n int
+	if err := c.QueryRow(ctx, `
+		SELECT count(*) FROM uptime.notification_outbox
+		WHERE monitor_id=$1 AND event_kind='RECOVERY'`, f2.monID).
+		Scan(&n); err != nil || n != 0 {
+		t.Fatalf("orphan recovery in outbox: n=%d err=%v", n, err)
 	}
 }
 

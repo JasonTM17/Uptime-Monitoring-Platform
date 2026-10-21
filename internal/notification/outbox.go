@@ -118,7 +118,11 @@ func AppendTransitionDeliveries(ctx context.Context, tx pgx.Tx,
 				in.IncidentID, cv.id).Scan(&p)
 			switch {
 			case err == pgx.ErrNoRows:
-				// DOWN intent absent: suppressed or no channels then.
+				// The incident's channel set is frozen at DOWN
+				// (spec-06): a channel whose DOWN intent was never
+				// created — bound or verified mid-incident — must
+				// never receive a standalone "recovered".
+				continue
 			case err != nil:
 				return nil, err
 			default:

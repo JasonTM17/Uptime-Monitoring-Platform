@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -179,14 +180,28 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 		HourlyRetentionDays: s.cfg.HourlyRetentionDays,
 		Resolution:          "none",
 	}
-	if err := s.repo.OwnMonitor(ctx, ownerID, monID); err != nil {
-		return res, err
-	}
 	if !we.After(ws) {
 		return res, fmt.Errorf("%w: empty range", ErrWindow)
 	}
+	// Every projection below reads one repeatable-read snapshot: a
+	// rollup or purge committing between statements can never split
+	// a row across the raw and hourly legs of the merge.
+	err := s.repo.InTx(ctx, func(rq *Repository) error {
+		var err error
+		res, err = s.statistics(ctx, rq, ownerID, monID, ws, we, now, res)
+		return err
+	})
+	return res, err
+}
 
-	rawFrom, hourFrom, segFrom, err := s.repo.RetentionBounds(ctx, monID)
+func (s *Service) statistics(ctx context.Context, repo *Repository,
+	ownerID, monID uuid.UUID, ws, we, now time.Time,
+	res StatsResult) (StatsResult, error) {
+	if err := repo.OwnMonitor(ctx, ownerID, monID); err != nil {
+		return res, err
+	}
+
+	rawFrom, hourFrom, segFrom, err := repo.RetentionBounds(ctx, monID)
 	if err != nil {
 		return res, err
 	}
@@ -198,9 +213,9 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 	// still has a run, which proves completeness. When suspect, the
 	// represented start snaps to the next UTC hour; the boundary
 	// hour's bucket cannot substitute because it is not fully inside
-	// the truncated interval. When the hour has no bucket, no purge
-	// could have removed its raw (retention never purges unrolled
-	// data), so raw is complete and the boundary stays exact.
+	// the truncated interval. A missing bucket is no proof of
+	// completeness either: retention can purge a bucket while
+	// anchor-kept raw survives.
 	var earliest time.Time // zero = nothing representable
 	if hourFrom != nil && hourFrom.Before(we) {
 		earliest = *hourFrom
@@ -208,24 +223,22 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 	if rawFrom != nil && rawFrom.Before(we) {
 		h0 := floorHour(*rawFrom)
 		edge := *rawFrom
-		if hasBucket, bErr := s.repo.BucketAt(ctx, monID, h0); bErr != nil {
-			return res, bErr
-		} else if hasBucket {
-			// Purge reached this hour at some point — it is exact
-			// only if every nominal slot still has a run.
-			exp, eErr := s.repo.ExpectedSlots(ctx, monID, h0,
-				h0.Add(time.Hour))
-			runs, rErr := s.repo.RunsInRange(ctx, monID, h0,
-				h0.Add(time.Hour))
-			if eErr != nil {
-				return res, eErr
-			}
-			if rErr != nil {
-				return res, rErr
-			}
-			if exp > runs {
-				edge = h0.Add(time.Hour)
-			}
+		// Purge can remove the bucket while anchor-retained raw
+		// survives (and vice versa) — the probe must run whether or
+		// not a bucket exists: the hour is exact only if every
+		// nominal segment slot still has a run.
+		exp, eErr := repo.ExpectedSlots(ctx, monID, h0,
+			h0.Add(time.Hour))
+		runs, rErr := repo.RunsInRange(ctx, monID, h0,
+			h0.Add(time.Hour))
+		if eErr != nil {
+			return res, eErr
+		}
+		if rErr != nil {
+			return res, rErr
+		}
+		if exp > runs {
+			edge = h0.Add(time.Hour)
 		}
 		if earliest.IsZero() || edge.Before(earliest) {
 			earliest = edge
@@ -260,11 +273,11 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 	res.IsPartial = ds.After(ws) || (rawFrom == nil && hourFrom == nil)
 
 	// Disjoint merge: complete buckets + uncovered raw.
-	hc, err := s.repo.HourlyCounts(ctx, monID, ds, de)
+	hc, err := repo.HourlyCounts(ctx, monID, ds, de)
 	if err != nil {
 		return res, err
 	}
-	rc, err := s.repo.RawCounts(ctx, monID, ds, de)
+	rc, err := repo.RawCounts(ctx, monID, ds, de)
 	if err != nil {
 		return res, err
 	}
@@ -286,10 +299,10 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 		expEnd = now
 	}
 	if expEnd.After(ds) {
-		if res.Expected, err = s.repo.ExpectedSlots(ctx, monID, ds, expEnd); err != nil {
+		if res.Expected, err = repo.ExpectedSlots(ctx, monID, ds, expEnd); err != nil {
 			return res, err
 		}
-		if res.Pending, err = s.repo.PendingSlots(ctx, monID, ds, expEnd); err != nil {
+		if res.Pending, err = repo.PendingSlots(ctx, monID, ds, expEnd); err != nil {
 			return res, err
 		}
 	}
@@ -303,7 +316,7 @@ func (s *Service) Statistics(ctx context.Context, ownerID,
 		c := float64(res.Counts.Valid) / float64(res.Expected)
 		res.Coverage = &c
 	}
-	res.Series, err = s.repo.Series(ctx, monID, ds, de)
+	res.Series, err = repo.Series(ctx, monID, ds, de)
 	return res, err
 }
 
@@ -394,13 +407,27 @@ func decodeKeyset(s, ver string) (keyset, error) {
 		return k, ErrCursor
 	}
 	var j keysetJSON
-	if err := json.Unmarshal(b, &j); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&j); err != nil {
+		return k, ErrCursor
+	}
+	// The timestamp must be a sane instant — a cursor with a
+	// zero/negative/far-future nanos value is structurally invalid.
+	if j.TS <= 0 || j.TS > nowNanosMax {
 		return k, ErrCursor
 	}
 	k.ts = time.Unix(0, j.TS).UTC()
 	k.id, err = uuid.Parse(j.ID)
-	return k, err
+	if err != nil {
+		return k, ErrCursor
+	}
+	return k, nil
 }
+
+// nowNanosMax bounds cursor timestamps: anything past this instant
+// (~2262) is garbage input, not a keyset position.
+const nowNanosMax = int64(1) << 62
 
 func floorHour(t time.Time) time.Time {
 	u := t.UTC()

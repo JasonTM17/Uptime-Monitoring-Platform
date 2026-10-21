@@ -16,10 +16,13 @@ incident transition
   -> rate-limit -> bounded send (5s) -> ACK SENT | reschedule | DEAD
 ```
 
-Causal rule: a RECOVERY row cannot be claimed while its DOWN
-predecessor is PENDING or DEAD. SUPPRESSED predecessors let the
-recovery proceed — suppression is the *authorized skip*, recorded
-honestly, never a fabricated send.
+Causal rule: a RECOVERY row is claimable only behind a SENT
+predecessor. A PENDING or DEAD predecessor blocks it; a SUPPRESSED
+predecessor *cascades* — the claim pass terminalizes the child
+SUPPRESSED too, because a channel that never learned "down" must
+never hear "recovered". Suppression is the authorized skip —
+recorded honestly, never a fabricated send.
+
 
 ## Row states
 
@@ -29,7 +32,7 @@ honestly, never a fabricated send.
 | LEASED | a claimant holds the row until `lease_expires_at`; expiry returns it to the stream |
 | SENT | provider accepted; `sent_at` recorded |
 | DEAD | permanent rejection or retry/age budget exhausted — blocks descendants |
-| SUPPRESSED | authorized skip (ineligible recipient or operator action) |
+| SUPPRESSED | authorized skip (ineligible recipient or operator action); cascades to children |
 
 ## Operator controls (internal services — no public route yet)
 
@@ -38,8 +41,10 @@ honestly, never a fabricated send.
   Refused for non-DEAD rows, version conflicts, and non-heads
   (resolve the head first).
 - **SuppressStream(headID)** — cascade SUPPRESSED over the head and
-  every unsent descendant. Use when a DOWN alert must be retracted:
-  suppressing only the RECOVERY would strand the stream.
+  every unsent descendant (LEASED rows included: the cleared lease
+  token fences the racing claimant ACK). Non-head ids are refused
+  with `ErrNotHead` — a RECOVERY must never be suppressed alone
+  behind a live DOWN; resolve the head.
 - **QueueTestNotification(owner, monitor, channel)** — persists one
   logical TEST intent after the eligibility fence: owned+bound
   monitor, VERIFIED+enabled channel, 1/min per-channel cooldown,

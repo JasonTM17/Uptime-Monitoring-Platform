@@ -414,6 +414,18 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 			if err != nil {
 				return Monitor{}, err
 			}
+			// An interval change is a cadence boundary: the old
+			// segment closes at the edit instant so history keeps its
+			// own interval and the gap to the next reserve is not
+			// scheduled under either cadence.
+			if in.IntervalSeconds != m.IntervalSeconds {
+				if _, err := tx.Exec(ctx, `
+				UPDATE uptime.schedule_segments
+				SET ends_at=clock_timestamp()
+				WHERE monitor_id=$1 AND ends_at IS NULL`, id); err != nil {
+					return Monitor{}, err
+				}
+			}
 			// Config change closes any open incident  -  honestly, as
 			// CONFIG_CHANGED, never as observed recovery.
 			if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
@@ -456,6 +468,17 @@ func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID,
 				return Monitor{}, err
 			}
 			if paused {
+				// The schedule stops here, not at the next reserve:
+				// closing the open segment in this transaction keeps
+				// paused time out of the expected-slot denominator.
+				// Resume leaves no open segment; the next reserve
+				// opens a fresh one at the new generation.
+				if _, err := tx.Exec(ctx, `
+				UPDATE uptime.schedule_segments
+				SET ends_at=clock_timestamp()
+				WHERE monitor_id=$1 AND ends_at IS NULL`, id); err != nil {
+					return Monitor{}, err
+				}
 				if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
 					id, nil, incident.ReasonConfigChanged); err != nil {
 					return Monitor{}, err
@@ -479,6 +502,12 @@ func (r *Repository) SoftDeleteMonitorTx(ctx context.Context, tx pgx.Tx, ownerID
 				 WHERE id=$1 AND user_id=$2`, id, ownerID)
 			if err != nil {
 				return Monitor{}, mapErr(err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE uptime.schedule_segments
+				SET ends_at=clock_timestamp()
+				WHERE monitor_id=$1 AND ends_at IS NULL`, id); err != nil {
+				return Monitor{}, err
 			}
 			if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
 				id, nil, incident.ReasonDeleted); err != nil {

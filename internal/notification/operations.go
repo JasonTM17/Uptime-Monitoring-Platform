@@ -104,16 +104,38 @@ func (o *Operations) RetryDeadHead(ctx context.Context, id uuid.UUID,
 	return tx.Commit(ctx)
 }
 
+// ErrNotHead rejects suppressing a mid-stream row: a RECOVERY must
+// never be suppressed alone behind a live DOWN — callers resolve the
+// stream from its first non-terminal row.
+var ErrNotHead = errors.New("notification: suppress the stream head — the row has a live causal predecessor")
+
 // SuppressStream cascades the authorized skip across a causal
 // stream: the named head plus every descendant whose chain reaches
 // it — a RECOVERY is never suppressed alone behind a live DOWN, and
-// never left standing when its DOWN is suppressed. Only unsent rows
-// (PENDING/DEAD) move; a LEASED send in flight cannot be recalled.
+// never left standing when its DOWN is suppressed. Unsent rows move
+// (PENDING/DEAD/LEASED): clearing a LEASED row's token fences the
+// racing claimant's ACK, the provider send itself is never recalled.
 // Returns the number of rows suppressed.
 func (o *Operations) SuppressStream(ctx context.Context,
 	headID uuid.UUID) (int, error) {
 	ctx, cancel := o.ctx(ctx)
 	defer cancel()
+	var predLive bool
+	err := o.pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT p.state IN ('PENDING','LEASED')
+		  FROM uptime.notification_outbox p
+		  WHERE p.id = o.predecessor_id), false)
+		FROM uptime.notification_outbox o WHERE o.id=$1`,
+		headID).Scan(&predLive)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("suppress head check: %w", err)
+	}
+	if predLive {
+		return 0, ErrNotHead
+	}
 	tag, err := o.pool.Exec(ctx, `
 		WITH RECURSIVE chain AS (
 		  SELECT id FROM uptime.notification_outbox WHERE id=$1
@@ -125,7 +147,7 @@ func (o *Operations) SuppressStream(ctx context.Context,
 		SET state='SUPPRESSED', lease_token=NULL, lease_expires_at=NULL,
 		    last_error_code='OPERATOR_SUPPRESSED', version=version+1
 		WHERE id IN (SELECT id FROM chain)
-		  AND state IN ('PENDING','DEAD')`, headID)
+		  AND state IN ('PENDING','DEAD','LEASED')`, headID)
 	if err != nil {
 		return 0, fmt.Errorf("suppress stream: %w", err)
 	}
@@ -227,7 +249,10 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 		return uuid.Nil, ErrRateLimited
 	}
 
-	// 4) the ONE logical intent — event_key dedups concurrent calls.
+	// 4) the ONE logical intent per cooldown window — the key
+	// carries the UTC minute so concurrent calls inside the window
+	// dedup while a terminal or DEAD TEST from an older window can
+	// never wedge the pair forever.
 	payload := fmt.Sprintf(`{"monitor_name":%q,"transition":"TEST"}`,
 		monName)
 	var id uuid.UUID
@@ -235,11 +260,13 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 		INSERT INTO uptime.notification_outbox
 		  (id,user_id,monitor_id,incident_id,channel_id,event_kind,
 		   event_key,predecessor_id,channel_version,safe_payload,state)
-		VALUES (gen_random_uuid(),$1,$2,NULL,$3,'TEST',$4,NULL,$5,$6,'PENDING')
+		VALUES (gen_random_uuid(),$1,$2,NULL,$3,'TEST',
+		  $6||floor(extract(epoch from clock_timestamp())/60)::text,
+		  NULL,$4,$5,'PENDING')
 		ON CONFLICT (event_key) DO NOTHING
 		RETURNING id`,
-		ownerID, monitorID, channelID,
-		"TEST:"+monitorID.String()+":"+channelID.String(), ver, payload).
+		ownerID, monitorID, channelID, ver, payload,
+		"TEST:"+monitorID.String()+":"+channelID.String()+":").
 		Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrDuplicateTest

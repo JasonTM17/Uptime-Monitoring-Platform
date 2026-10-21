@@ -284,8 +284,11 @@ func TestDispatcherRestartOrdering(t *testing.T) {
 	ch2 := deliverableChannel(t, c, f2, ring)
 	revoked := seedOutbox(t, c, f2, ch2, "DOWN", nil, "PENDING")
 
-	// Resolve the dead head honestly (the authorized skip), then a
-	// restarted dispatcher claims both eligible rows in one pass.
+	// Resolve the dead head honestly (the authorized skip). The
+	// skip cascades: a suppressed DOWN never releases its RECOVERY
+	// to send — a channel that never learned "down" must never hear
+	// "recovered". The restarted dispatcher claims only the second
+	// stream's row.
 	if _, err := c.Exec(ctx, `
 		UPDATE uptime.notification_outbox SET state='SUPPRESSED'
 		WHERE id=$1`, down); err != nil {
@@ -294,8 +297,11 @@ func TestDispatcherRestartOrdering(t *testing.T) {
 	c2 := conn(t)
 	d2 := disp(t, c2, ring, snd)
 	cl := claimsOf(t, c2)
-	if len(cl) != 2 {
+	if len(cl) != 1 {
 		t.Fatalf("claims %d", len(cl))
+	}
+	if st := stateOf(t, c, rec); st != "SUPPRESSED" {
+		t.Fatalf("cascade left recovery %s", st)
 	}
 
 	// Revoke the channel after the lease committed — the recipient
@@ -306,20 +312,19 @@ func TestDispatcherRestartOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range cl {
-		d2.process(ctx, row)
+		if err := d2.process(ctx, row); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if st := stateOf(t, c, rec); st != "SENT" {
+	if st := stateOf(t, c, rec); st != "SUPPRESSED" {
 		t.Fatalf("recovery state %s", st)
 	}
 	if st := stateOf(t, c, revoked); st != "SUPPRESSED" {
 		t.Fatalf("revoked state %s", st)
 	}
-	if snd.count() != 1 {
-		t.Fatalf("provider sends %d — revoked destination was sent",
+	if snd.count() != 0 {
+		t.Fatalf("provider sends %d — suppressed streams must not send",
 			snd.count())
-	}
-	if l := snd.last(); l.chatID != "424242" {
-		t.Fatalf("unexpected destination %q", l.chatID)
 	}
 }

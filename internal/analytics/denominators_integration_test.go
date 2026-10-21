@@ -277,3 +277,64 @@ func TestPurgePreservesDenominator(t *testing.T) {
 		t.Fatalf("counts drifted %+v -> %+v", before.Counts, after.Counts)
 	}
 }
+
+// TestDashboardDisjointMerge — a result rolled into the CURRENT
+// partial hour must count exactly once: the open bucket is not yet
+// "fully inside" the window, so the raw leg owns it.
+func TestDashboardDisjointMerge(t *testing.T) {
+	_, pool, c := svcFor(t)
+	cleanAnalytics(t, c)
+	f := mkMonitor(t, c)
+	slot := time.Now().Add(-5 * time.Minute)
+	mkResultSeg(t, c, f.monID, f.segID, 1, slot, "SUCCESS", true, b(true))
+	if _, err := RollupBatch(context.Background(), pool,
+		RollupConfig{Batch: 100}); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(pool, 10*time.Second)
+	sum, err := repo.DashboardSummary(context.Background(), f.userID,
+		time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Valid24h != 1 || sum.Success24h != 1 {
+		t.Fatalf("open-hour merge double-counted: valid=%d succ=%d",
+			sum.Valid24h, sum.Success24h)
+	}
+}
+
+// TestPurgedBucketFallback — an anchor-retained rolled row whose
+// bucket was purged must fall back to the raw leg: counted once,
+// never zero.
+func TestPurgedBucketFallback(t *testing.T) {
+	svc, pool, c := svcFor(t)
+	cleanAnalytics(t, c)
+	f := mkMonitor(t, c)
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	// keep the segment covering the slot so the window represents
+	if _, err := c.Exec(context.Background(), `
+		UPDATE uptime.schedule_segments SET starts_at=$1
+		WHERE id=$2`, old.Add(-time.Hour), f.segID); err != nil {
+		t.Fatal(err)
+	}
+	mkResultSeg(t, c, f.monID, f.segID, 1, old, "SUCCESS", true, b(true))
+	if _, err := RollupBatch(context.Background(), pool,
+		RollupConfig{Batch: 100}); err != nil {
+		t.Fatal(err)
+	}
+	// Anchor-retain the result (incident FK shape) and purge its
+	// bucket — the path that made rolled rows count zero times.
+	if _, err := c.Exec(context.Background(), `
+		DELETE FROM uptime.hourly_stats WHERE monitor_id=$1`,
+		f.monID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.Statistics(context.Background(), f.userID, f.monID,
+		old.Add(-time.Hour), time.Now(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Counts.Valid != 1 || res.Counts.Successes != 1 {
+		t.Fatalf("purged bucket dropped the sample: %+v", res.Counts)
+	}
+}

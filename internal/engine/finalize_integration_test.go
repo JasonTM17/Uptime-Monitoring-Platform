@@ -103,7 +103,8 @@ func TestFinalizeAtomicity(t *testing.T) {
 	// Clean slate for exact counts - children before parents so
 	// RESTRICT foreign keys cannot silently veto a delete.
 	for _, tbl := range []string{
-		"notification_outbox", "incidents", "check_results",
+		"hourly_stats", "notification_outbox", "incidents",
+		"check_results",
 		"check_runs", "schedule_segments", "monitor_channels", "monitors",
 	} {
 		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {
@@ -282,7 +283,8 @@ func TestStreakSaturation(t *testing.T) {
 	defer owner.Release(ctx)
 	w := NewWriter(owner, time.Minute)
 	for _, tbl := range []string{
-		"notification_outbox", "incidents", "check_results",
+		"hourly_stats", "notification_outbox", "incidents",
+		"check_results",
 		"check_runs", "schedule_segments", "monitor_channels", "monitors",
 	} {
 		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {

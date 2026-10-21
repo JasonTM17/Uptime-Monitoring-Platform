@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // fakeClock is the deterministic time source.
@@ -113,6 +114,51 @@ func mkClaim(kind string, seq int) Claim {
 		LeaseToken: uuid.New(), Attempts: 1,
 		CreatedAt:   time.Now(),
 		SafePayload: []byte(`{"monitor_name":"m"}`),
+	}
+}
+
+// A transient fence failure is not an eligibility verdict: the row
+// stays recoverable (never SUPPRESSED), the tick does not count it,
+// and the failure surfaces through LastErr.
+func TestTransientRevalidateKeepsRow(t *testing.T) {
+	fs := newFakeStore()
+	d := testDispatcher(fs, &fakeSender{n: 1}, &fakeClock{})
+	cl := mkClaim("DOWN", 1)
+	fs.claims = []Claim{cl}
+	d.revalidate = func(ctx context.Context, c Claim) (RecipientGate, error) {
+		return RecipientGate{}, errors.New("db hiccup")
+	}
+	n, err := d.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("transient failure counted as disposition")
+	}
+	if _, ok := fs.supp[cl.ID]; ok {
+		t.Fatal("transient error terminalized the row")
+	}
+	if d.LastErr() == nil {
+		t.Fatal("failure not surfaced via LastErr")
+	}
+}
+
+// A recipient row gone entirely is a genuine skip — suppress fires
+// with recipient_gone and the tick counts the disposition.
+func TestGoneRecipientSuppresses(t *testing.T) {
+	fs := newFakeStore()
+	d := testDispatcher(fs, &fakeSender{n: 1}, &fakeClock{})
+	cl := mkClaim("DOWN", 1)
+	fs.claims = []Claim{cl}
+	d.revalidate = func(ctx context.Context, c Claim) (RecipientGate, error) {
+		return RecipientGate{}, pgx.ErrNoRows
+	}
+	n, err := d.Tick(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if fs.supp[cl.ID] != "recipient_gone" {
+		t.Fatalf("supp=%q", fs.supp[cl.ID])
 	}
 }
 

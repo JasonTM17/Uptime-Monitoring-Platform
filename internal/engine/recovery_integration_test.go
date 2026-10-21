@@ -19,7 +19,8 @@ func cleanEngine(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 	ctx := context.Background()
 	for _, tbl := range []string{
-		"notification_outbox", "incidents", "check_results",
+		"hourly_stats", "notification_outbox", "incidents",
+		"check_results",
 		"check_runs", "schedule_segments", "monitor_channels", "monitors",
 	} {
 		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {

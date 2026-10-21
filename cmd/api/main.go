@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/analytics"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/engine"
@@ -149,6 +150,78 @@ func run() error {
 	} else {
 		eng = e
 	}
+	// Delivery pipeline (Phase 06): the engine's finalize commits the
+	// durable intent; these loops carry it to the provider and keep
+	// the analytic lanes current. One dedicated conn per goroutine —
+	// pgx.Conn is not goroutine-safe. Janitor cadences are fixed spec
+	// constants; only the whole feature is env-gated.
+	var bgCancel context.CancelFunc
+	var bgWG sync.WaitGroup
+	if cfg.Notify.Enabled {
+		if ring, kerr := notification.ParseKeyring(
+			cfg.Notify.KeyringRead, cfg.Notify.KeyringWriteV); kerr != nil {
+			log.Error("notification keyring invalid; delivery off", "err", kerr)
+		} else if dispConn, derr := pgx.Connect(ctx, cfg.Database.URL); derr != nil {
+			log.Error("dispatcher conn failed; delivery off", "err", derr)
+		} else if janConn, jerr := pgx.Connect(ctx, cfg.Database.URL); jerr != nil {
+			log.Error("janitor conn failed; delivery off", "err", jerr)
+			_ = dispConn.Close(context.Background())
+		} else {
+			bot := cfg.Notify.BotToken
+			bgCtx, cancel := context.WithCancel(context.Background())
+			bgCancel = cancel
+			leaseCfg := notification.LeaseConfig{
+				Batch:       10,
+				LeaseFor:    90 * time.Second, // > Batch*SendTimeout + ACK margin
+				MaxAttempts: notification.DefaultRetryPolicy.MaxAttempts,
+			}
+			disp := notification.NewDispatcher(dispConn, chanRepo, ring,
+				notification.NewTelegramSender(nil),
+				notification.DispatcherConfig{
+					Lease:       leaseCfg,
+					Retry:       notification.DefaultRetryPolicy,
+					SendTimeout: 5 * time.Second,
+					TickEvery:   time.Second,
+					BotToken:    bot,
+				}, notification.NewLimiter(30, 1, nil))
+			bgWG.Add(2)
+			go func() {
+				defer bgWG.Done()
+				defer dispConn.Close(context.Background())
+				_ = disp.Run(bgCtx)
+			}()
+			go func() {
+				defer bgWG.Done()
+				defer janConn.Close(context.Background())
+				reclaim := time.NewTicker(30 * time.Second)
+				rollup := time.NewTicker(60 * time.Second)
+				retain := time.NewTicker(time.Hour)
+				defer reclaim.Stop()
+				defer rollup.Stop()
+				defer retain.Stop()
+				for {
+					select {
+					case <-bgCtx.Done():
+						return
+					case <-reclaim.C:
+						_, _ = notification.ReclaimExpired(bgCtx, janConn, leaseCfg)
+					case <-rollup.C:
+						_, _ = analytics.RollupUntilQuiet(bgCtx, pool,
+							analytics.RollupConfig{Batch: 500})
+					case <-retain.C:
+						_, _ = analytics.RunRetention(bgCtx, pool,
+							analytics.RetentionConfig{
+								RawRetentionHours:   rawHours,
+								HourlyRetentionDays: 30,
+								OutboxRetentionDays: 30,
+								Batch:               500,
+							}, time.Now())
+					}
+				}
+			}()
+		}
+	}
+
 	ready := func(ctx context.Context) error {
 		if err := database.Ping(pool)(ctx); err != nil {
 			return err
@@ -173,9 +246,22 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors/{id}/stats", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/dashboard/", Handler: anaHandler.Mux()})
 	err = srv.Run(ctx)
-	// HTTP drained first, then the engine's own ordered stop:
-	// readiness flips inside Shutdown before its worker/finalize
-	// drain — bounded by the same shutdown timeout.
+	// HTTP drained first. Then the delivery loops stop accepting
+	// work — the dispatcher's own in-flight send finishes inside
+	// its send timeout before the engine's ordered stop runs.
+	if bgCancel != nil {
+		bgCancel()
+		done := make(chan struct{})
+		go func() { bgWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(cfg.HTTP.ShutdownTimeout):
+			log.Error("delivery loops did not stop in time")
+		}
+	}
+	// Finally the engine's own ordered stop: readiness flips inside
+	// Shutdown before its worker/finalize drain — bounded by the
+	// same shutdown timeout.
 	if eng != nil {
 		sctx, cancel := context.WithTimeout(context.Background(),
 			cfg.HTTP.ShutdownTimeout)

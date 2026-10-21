@@ -61,9 +61,12 @@ type Claim struct {
 // short transaction: SKIP LOCKED selection, per-row lease stamp,
 // attempts increment, commit — all before the caller touches any
 // network. Eligibility: PENDING, next_attempt_at due, and the causal
-// predecessor (if any) already terminal-SENT or SUPPRESSED — a
-// PENDING or DEAD predecessor blocks its RECOVERY forever until
-// operations resolves the head.
+// predecessor (if any) already terminal-SENT — a SUPPRESSED
+// predecessor never releases a child to send (a channel that never
+// learned "down" must never hear "recovered"); instead the same
+// claim pass cascades the skip: the child terminalizes SUPPRESSED
+// itself. A PENDING or DEAD predecessor blocks its RECOVERY forever
+// until operations resolves the head.
 func ClaimDue(ctx context.Context, conn *pgx.Conn,
 	cfg LeaseConfig) ([]Claim, error) {
 	if err := cfg.valid(); err != nil {
@@ -75,6 +78,21 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 	}
 	defer tx.Rollback(ctx)
 
+	// Cascade the authorized skip first: a child standing behind a
+	// SUPPRESSED head terminalizes SUPPRESSED itself — the skip is
+	// the durable resolution, never a send. (LEASED children
+	// resolve on their next claim pass; the lease token fences any
+	// racing ACK.)
+	if _, err := tx.Exec(ctx, `
+		UPDATE uptime.notification_outbox c
+		SET state='SUPPRESSED', last_error_code='OPERATOR_SUPPRESSED',
+		    version=c.version+1
+		FROM uptime.notification_outbox p
+		WHERE c.predecessor_id=p.id AND p.state='SUPPRESSED'
+		  AND c.state='PENDING'`); err != nil {
+		return nil, fmt.Errorf("cascade suppress: %w", err)
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT o.id,o.monitor_id,o.user_id,o.channel_id,o.incident_id,
 		       o.event_kind,o.channel_version,o.attempts,o.created_at,
@@ -84,7 +102,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 		  AND (o.predecessor_id IS NULL OR EXISTS (
 		    SELECT 1 FROM uptime.notification_outbox p
 		    WHERE p.id=o.predecessor_id
-		      AND p.state IN ('SENT','SUPPRESSED')))
+		      AND p.state='SENT'))
 		ORDER BY o.next_attempt_at, o.created_at, o.id
 		LIMIT $1
 		FOR UPDATE OF o SKIP LOCKED`, cfg.Batch)
@@ -107,6 +125,11 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 		return nil, err
 	}
 	if len(claims) == 0 {
+		// Commit anyway: the cascade-suppress above is durable
+		// work even when no row was claimable.
+		if cerr := tx.Commit(ctx); cerr != nil {
+			return nil, cerr
+		}
 		return nil, ErrClaimClosed
 	}
 	for i := range claims {
@@ -237,6 +260,9 @@ func ReclaimExpired(ctx context.Context, conn *pgx.Conn,
 		                           THEN next_attempt_at
 		                           ELSE clock_timestamp() END,
 		    lease_token=NULL, lease_expires_at=NULL,
+		    last_error_code = CASE WHEN attempts >= $2
+		                           THEN 'LEASE_LOST'
+		                           ELSE last_error_code END,
 		    version=version+1
 		WHERE id IN (
 		  SELECT id FROM uptime.notification_outbox

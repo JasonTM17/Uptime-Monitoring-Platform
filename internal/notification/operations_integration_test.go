@@ -115,6 +115,58 @@ func TestSuppressCausalStream(t *testing.T) {
 }
 
 // Owner-scoped query: another user's rows are invisible.
+// A terminal or DEAD TEST from an earlier window can never wedge
+// the pair: the next cooldown window queues a fresh intent.
+func TestTestNotificationRequeues(t *testing.T) {
+	ops, _ := opsFor(t)
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, true)
+
+	// Wedge simulation: a DEAD TEST keyed to a previous minute.
+	oldKey := `TEST:` + f.monID.String() + `:` + ch.String() + `:1`
+	if _, err := c.Exec(context.Background(), `
+		INSERT INTO uptime.notification_outbox
+		  (id,user_id,monitor_id,channel_id,event_kind,event_key,
+		   channel_version,safe_payload,state,attempts,created_at)
+		VALUES (gen_random_uuid(),$1,$2,$3,'TEST',$4,1,'{}','DEAD',8,
+		        clock_timestamp() - interval '1 hour')`,
+		f.userID, f.monID, ch, oldKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.QueueTestNotification(context.Background(),
+		f.userID, f.monID, ch, DefaultTestRate); err != nil {
+		t.Fatalf("requeue wedged by dead intent: %v", err)
+	}
+}
+
+// Suppressing a mid-stream row is refused: a RECOVERY must never be
+// suppressed alone behind a live DOWN — resolve the head.
+func TestSuppressStreamHeadOnly(t *testing.T) {
+	ops, _ := opsFor(t)
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+
+	down := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	rec := seedOutbox(t, c, f, ch, "RECOVERY", &down, "PENDING")
+	if _, err := ops.SuppressStream(context.Background(), rec); !errors.Is(err, ErrNotHead) {
+		t.Fatalf("mid-stream suppress: %v", err)
+	}
+	if stateOf(t, c, rec) != "PENDING" {
+		t.Fatal("non-head suppress moved the row")
+	}
+	// The head suppresses the whole stream.
+	if n, err := ops.SuppressStream(context.Background(), down); err != nil || n != 2 {
+		t.Fatalf("head suppress n=%d err=%v", n, err)
+	}
+	if stateOf(t, c, rec) != "SUPPRESSED" {
+		t.Fatal("cascade missed the child")
+	}
+}
+
 func TestDeliveryOwnership(t *testing.T) {
 	ops, _ := opsFor(t)
 	c := conn(t)

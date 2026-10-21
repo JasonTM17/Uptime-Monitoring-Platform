@@ -15,15 +15,41 @@ import (
 // a foreign monitor id returns the same sentinel as a missing one.
 var ErrMonitorNotFound = errors.New("monitor not found")
 
+// Querier is the pgx surface a projection runs against — the pool
+// directly, or one transaction — so multi-statement reads can share
+// a single snapshot.
+type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Repository reads analytics projections. It never mutates state and
 // never triggers network work.
 type Repository struct {
 	pool    *pgxpool.Pool
+	q       Querier
 	timeout time.Duration
 }
 
 func NewRepository(pool *pgxpool.Pool, timeout time.Duration) *Repository {
-	return &Repository{pool: pool, timeout: timeout}
+	return &Repository{pool: pool, q: pool, timeout: timeout}
+}
+
+// InTx runs fn against a read-only REPEATABLE READ snapshot: every
+// projection query inside sees the same committed instant, so a
+// rollup or purge committing mid-read can never split a result row
+// between the raw and hourly legs — or count it in both.
+func (r *Repository) InTx(ctx context.Context,
+	fn func(*Repository) error) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	return fn(&Repository{pool: r.pool, q: tx, timeout: r.timeout})
 }
 
 func (r *Repository) ctx(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -37,7 +63,7 @@ func (r *Repository) OwnMonitor(ctx context.Context, ownerID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT 1 FROM uptime.monitors
 		WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
 		monID, ownerID).Scan(&n)
@@ -71,7 +97,7 @@ func (r *Repository) ListChecks(ctx context.Context, monID uuid.UUID,
 	limit int) ([]CheckRow, error) {
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.q.Query(ctx, `
 		SELECT cr.id, cr.slot_at, cr.started_at, cr.finished_at,
 		       cr.status, res.outcome, res.eligible, res.success,
 		       res.http_status, res.duration_ms, res.observed_at
@@ -126,7 +152,7 @@ func (r *Repository) ListIncidents(ctx context.Context, monID uuid.UUID,
 	case "resolved":
 		cond = "AND i.resolved_at IS NOT NULL"
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.q.Query(ctx, `
 		SELECT i.id, i.opened_at, i.resolved_at, i.close_reason,
 		       i.opened_check_id, i.resolved_check_id
 		FROM uptime.incidents i
@@ -163,12 +189,12 @@ func (r *Repository) RetentionBounds(ctx context.Context,
 	defer cancel()
 	// A run without an accepted result (STALE/INTERRUPTED) is still
 	// retained evidence the slot existed  --  bound on runs, not results.
-	if err = r.pool.QueryRow(ctx, `
+	if err = r.q.QueryRow(ctx, `
 		SELECT min(slot_at) FROM uptime.check_runs
 		WHERE monitor_id=$1`, monID).Scan(&rawFrom); err != nil {
 		return nil, nil, nil, err
 	}
-	if err = r.pool.QueryRow(ctx, `
+	if err = r.q.QueryRow(ctx, `
 		SELECT min(bucket_start) FROM uptime.hourly_stats
 		WHERE monitor_id=$1`, monID).Scan(&hourlyFrom); err != nil {
 		return nil, nil, nil, err
@@ -176,7 +202,7 @@ func (r *Repository) RetentionBounds(ctx context.Context,
 	// Segments are denominator evidence: a window whose runs are all
 	// purged but whose schedule survives is still representable as
 	// all-missed.
-	if err = r.pool.QueryRow(ctx, `
+	if err = r.q.QueryRow(ctx, `
 		SELECT min(starts_at) FROM uptime.schedule_segments
 		WHERE monitor_id=$1`, monID).Scan(&segFrom); err != nil {
 		return nil, nil, nil, err
@@ -191,7 +217,7 @@ func (r *Repository) HourlyCounts(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var c SampleCounts
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT COALESCE(sum(valid_samples),0),
 		       COALESCE(sum(successes),0),
 		       COALESCE(sum(failures),0),
@@ -216,7 +242,7 @@ func (r *Repository) RawCounts(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var c SampleCounts
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT count(*) FILTER (WHERE res.eligible),
 		       count(*) FILTER (WHERE res.eligible AND res.success),
 		       count(*) FILTER (WHERE res.eligible AND NOT res.success),
@@ -234,7 +260,13 @@ func (r *Repository) RawCounts(ctx context.Context, monID uuid.UUID,
 		         date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
 		           AT TIME ZONE 'UTC' >= $2
 		         AND date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
-		           AT TIME ZONE 'UTC' + interval '1 hour' <= $3))`,
+		           AT TIME ZONE 'UTC' + interval '1 hour' <= $3
+		         AND EXISTS (
+		           SELECT 1 FROM uptime.hourly_stats hb
+		           WHERE hb.monitor_id=res.monitor_id
+		             AND hb.bucket_start =
+		               date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
+		                 AT TIME ZONE 'UTC')))`,
 		monID, ds, de).Scan(&c.Valid, &c.Successes, &c.Failures,
 		&c.Excluded, &c.DurationSumMs, &c.DurationCount)
 	return c, err
@@ -250,7 +282,7 @@ func (r *Repository) ExpectedSlots(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var n int64
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT COALESCE(sum(GREATEST(0,
 		  CEIL(EXTRACT(EPOCH FROM
 		    (LEAST(COALESCE(s.ends_at,$2),$2) - s.starts_at))::numeric
@@ -274,7 +306,7 @@ func (r *Repository) PendingSlots(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var n int64
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT count(*) FROM uptime.check_runs
 		WHERE monitor_id=$1 AND slot_at>=$2 AND slot_at<$3
 		  AND status IN ('RESERVED','RUNNING')`,
@@ -289,7 +321,7 @@ func (r *Repository) RunsInRange(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var n int64
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT count(*) FROM uptime.check_runs
 		WHERE monitor_id=$1 AND slot_at>=$2 AND slot_at<$3`,
 		monID, ds, de).Scan(&n)
@@ -304,7 +336,7 @@ func (r *Repository) BucketAt(ctx context.Context, monID uuid.UUID,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT 1 FROM uptime.hourly_stats
 		WHERE monitor_id=$1 AND bucket_start=$2`,
 		monID, bucket.UTC()).Scan(&n)
@@ -329,7 +361,12 @@ func (r *Repository) Series(ctx context.Context, monID uuid.UUID,
 	ds, de time.Time) ([]BucketPoint, error) {
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.q.Query(ctx, `
+		SELECT bucket_start,
+		       sum(valid_samples), sum(successes), sum(failures),
+		       sum(excluded_samples), sum(duration_sum_ms),
+		       sum(duration_count)
+		FROM (
 		SELECT bucket_start, valid_samples, successes, failures,
 		       excluded_samples, duration_sum_ms, duration_count
 		FROM uptime.hourly_stats
@@ -356,7 +393,15 @@ func (r *Repository) Series(ctx context.Context, monID uuid.UUID,
 		         date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
 		           AT TIME ZONE 'UTC' >= $2
 		         AND date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
-		           AT TIME ZONE 'UTC' + interval '1 hour' <= $3))
+		           AT TIME ZONE 'UTC' + interval '1 hour' <= $3
+		         AND EXISTS (
+		           SELECT 1 FROM uptime.hourly_stats hb
+		           WHERE hb.monitor_id=res.monitor_id
+		             AND hb.bucket_start =
+		               date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
+		                 AT TIME ZONE 'UTC')))
+		GROUP BY 1
+		) m
 		GROUP BY 1
 		ORDER BY 1`,
 		monID, ds, de)
@@ -401,7 +446,7 @@ func (r *Repository) DashboardSummary(ctx context.Context,
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
 	var s SummaryRow
-	err := r.pool.QueryRow(ctx, `
+	err := r.q.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE NOT is_paused),
 		       count(*) FILTER (WHERE is_paused),
@@ -419,11 +464,12 @@ func (r *Repository) DashboardSummary(ctx context.Context,
 	if err != nil {
 		return s, fmt.Errorf("summary monitors: %w", err)
 	}
-	err = r.pool.QueryRow(ctx, `
+	err = r.q.QueryRow(ctx, `
 		SELECT COALESCE((SELECT sum(valid_samples) FROM uptime.hourly_stats h
 		  JOIN uptime.monitors m ON m.id=h.monitor_id
 		  WHERE m.user_id=$1 AND m.deleted_at IS NULL
-		    AND h.bucket_start >= $2),0)
+		    AND h.bucket_start >= $2
+		    AND h.bucket_start + interval '1 hour' <= now()),0)
 		     + COALESCE((SELECT count(*) FROM uptime.check_results res
 		  JOIN uptime.check_runs cr
 		    ON cr.id=res.check_id AND cr.monitor_id=res.monitor_id
@@ -434,11 +480,17 @@ func (r *Repository) DashboardSummary(ctx context.Context,
 		     date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
 		       AT TIME ZONE 'UTC' >= $2
 		     AND date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
-		       AT TIME ZONE 'UTC' + interval '1 hour' <= now()))),0),
+		       AT TIME ZONE 'UTC' + interval '1 hour' <= now()
+		     AND EXISTS (SELECT 1 FROM uptime.hourly_stats hb
+		       WHERE hb.monitor_id=res.monitor_id
+		         AND hb.bucket_start =
+		           date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
+		             AT TIME ZONE 'UTC')))),0),
 		   COALESCE((SELECT sum(successes) FROM uptime.hourly_stats h
 		  JOIN uptime.monitors m ON m.id=h.monitor_id
 		  WHERE m.user_id=$1 AND m.deleted_at IS NULL
-		    AND h.bucket_start >= $2),0)
+		    AND h.bucket_start >= $2
+		    AND h.bucket_start + interval '1 hour' <= now()),0)
 		     + COALESCE((SELECT count(*) FROM uptime.check_results res
 		  JOIN uptime.check_runs cr
 		    ON cr.id=res.check_id AND cr.monitor_id=res.monitor_id
@@ -449,7 +501,12 @@ func (r *Repository) DashboardSummary(ctx context.Context,
 		     date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
 		       AT TIME ZONE 'UTC' >= $2
 		     AND date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
-		       AT TIME ZONE 'UTC' + interval '1 hour' <= now()))),0)`,
+		       AT TIME ZONE 'UTC' + interval '1 hour' <= now()
+		     AND EXISTS (SELECT 1 FROM uptime.hourly_stats hb
+		       WHERE hb.monitor_id=res.monitor_id
+		         AND hb.bucket_start =
+		           date_trunc('hour', cr.slot_at AT TIME ZONE 'UTC')
+		             AT TIME ZONE 'UTC')))),0)`,
 		ownerID, since).Scan(&s.Valid24h, &s.Success24h)
 	return s, err
 }
@@ -460,7 +517,7 @@ func (r *Repository) RecentIncidents(ctx context.Context,
 	ownerID uuid.UUID, limit int) ([]IncidentListRow, error) {
 	ctx, cancel := r.ctx(ctx)
 	defer cancel()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.q.Query(ctx, `
 		SELECT i.id, i.monitor_id, m.name, i.opened_at, i.resolved_at,
 		       i.close_reason
 		FROM uptime.incidents i

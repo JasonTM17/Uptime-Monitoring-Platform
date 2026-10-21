@@ -223,15 +223,21 @@ func TestPredecessorBlocksClaim(t *testing.T) {
 		t.Fatal("recovery claimed behind DEAD predecessor")
 	}
 
-	// SUPPRESSED predecessor is the authorized skip — recovery flows.
+	// SUPPRESSED predecessor must never release a child to send —
+	// a channel that never learned "down" must never hear
+	// "recovered". The same claim pass cascades the authorized skip:
+	// the child terminalizes SUPPRESSED itself.
 	if _, err := c.Exec(context.Background(), `
 		UPDATE uptime.notification_outbox SET state='SUPPRESSED'
 		WHERE id=$1`, down); err != nil {
 		t.Fatal(err)
 	}
 	claims, err = ClaimDue(context.Background(), c, testLease)
-	if err != nil || len(claims) != 1 || claims[0].ID != rec {
-		t.Fatalf("recovery after suppress: %+v %v", claims, err)
+	if len(claims) != 0 && err == nil {
+		t.Fatalf("claimed behind suppressed head: %+v", claims)
+	}
+	if stateOf(t, c, rec) != "SUPPRESSED" {
+		t.Fatalf("cascade suppress failed: %s", stateOf(t, c, rec))
 	}
 }
 

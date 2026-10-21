@@ -21,7 +21,8 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 	// Clean slate: prior engine tests leave due monitors + window
 	// charges on this disposable DB. Children before parents (RESTRICT).
 	for _, tbl := range []string{
-		"notification_outbox", "incidents", "check_results", "check_runs",
+		"hourly_stats", "notification_outbox", "incidents",
+		"check_results", "check_runs",
 		"schedule_segments", "monitor_channels", "monitors",
 	} {
 		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {
@@ -117,7 +118,8 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 	// earlier suite tests can live inside it, so re-clean for a
 	// deterministic baseline before measuring the cap.
 	for _, tbl := range []string{
-		"notification_outbox", "incidents", "check_results",
+		"hourly_stats", "notification_outbox", "incidents",
+		"check_results",
 		"check_runs", "schedule_segments", "monitor_channels", "monitors",
 	} {
 		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {

@@ -182,10 +182,17 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 		err = pgx.ErrNoRows
 	}
 	if err == pgx.ErrNoRows {
+		// The segment anchors at the owed slot, not the reserve
+		// instant: next_check_at is the first nominal slot the run
+		// lattice charges, so starting coverage there keeps every
+		// run slot inside its segment and the ExpectedSlots grid on
+		// the same phase — no slot can fall outside all coverage.
 		if cerr := tx.QueryRow(ctx, `
 			INSERT INTO uptime.schedule_segments
 			  (id,monitor_id,generation,starts_at,interval_seconds)
-			VALUES (gen_random_uuid(),$1,$2,clock_timestamp(),$3)
+			SELECT gen_random_uuid(),$1,$2,
+			       LEAST(clock_timestamp(), m.next_check_at),$3
+			FROM uptime.monitors m WHERE m.id=$1
 			RETURNING id`, monitorID, gen, intervalS).Scan(&segID); cerr != nil {
 			return nil, cerr
 		}

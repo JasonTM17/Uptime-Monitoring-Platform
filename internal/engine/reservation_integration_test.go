@@ -19,6 +19,14 @@ func seedDue(t *testing.T) (uuid.UUID, uuid.UUID) {
 	conn := engineConn(t)
 	ctx := context.Background()
 	var userID, monID uuid.UUID
+	// The fail-closed quota singleton is app-seeded at startup
+	// (migration leaves it empty); fixtures must create it honestly
+	// rather than rely on residue from other packages' tests.
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO uptime.quota_budgets(id,global_monitor_limit)
+		VALUES (1,1000) ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	if err := conn.QueryRow(ctx, `
 		INSERT INTO uptime.users(id,email,password_hash,status,monitor_limit)
 		VALUES (gen_random_uuid(),$1,'x','ACTIVE',10) RETURNING id`,

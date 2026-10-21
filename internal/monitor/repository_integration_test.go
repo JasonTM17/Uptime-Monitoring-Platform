@@ -290,6 +290,53 @@ func TestMonitorRepository(t *testing.T) {
 			r.Generation != p.Generation+1 {
 			t.Fatalf("resume fabricated state %+v", r)
 		}
+
+		t.Run("pause closes the open schedule segment", func(t *testing.T) {
+			owner := mkOwner(t, pool, 100)
+			m, _ := repo.CreateMonitor(ctx, owner, wf(), bigCaps)
+			// Engine owns segment lifecycle — seed the open segment
+			// the first reserve would create.
+			if _, err := pool.Exec(ctx, `
+				INSERT INTO uptime.schedule_segments
+				  (id,monitor_id,generation,starts_at,interval_seconds)
+				VALUES (gen_random_uuid(),$1,$2,now(),60)`,
+				m.ID, m.Generation); err != nil {
+				t.Fatal(err)
+			}
+			var open int
+			p, err := repo.SetMonitorPaused(ctx, owner, m.ID, m.Generation, true)
+			if err != nil {
+				t.Fatalf("pause: %v", err)
+			}
+			var endsAt *time.Time
+			if err := pool.QueryRow(ctx, `
+			SELECT max(ends_at) FROM uptime.schedule_segments
+			WHERE monitor_id=$1`, m.ID).Scan(&endsAt); err != nil {
+				t.Fatal(err)
+			}
+			if endsAt == nil {
+				t.Fatal("pause left the segment open — paused time would " +
+					"enter the expected-slot denominator")
+			}
+			if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM uptime.schedule_segments
+			WHERE monitor_id=$1 AND ends_at IS NULL`, m.ID).
+				Scan(&open); err != nil || open != 0 {
+				t.Fatalf("still %d open segments err=%v", open, err)
+			}
+			// Resume leaves coverage closed; the next reserve opens a
+			// fresh segment — the pause window never becomes expected.
+			if _, err := repo.SetMonitorPaused(ctx, owner, m.ID,
+				p.Generation, false); err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM uptime.schedule_segments
+			WHERE monitor_id=$1 AND ends_at IS NULL`, m.ID).
+				Scan(&open); err != nil || open != 0 {
+				t.Fatalf("resume re-opened a segment: %d err=%v", open, err)
+			}
+		})
 		// Resume marks eligibility only — no check sample may appear.
 		if r.LastCheckedAt != nil || r.LastResponseTimeMs != nil ||
 			r.LastErrorType != nil {

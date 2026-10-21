@@ -2,6 +2,8 @@ package notification
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +49,9 @@ type Limiter struct {
 // NewLimiter builds a token-bucket limiter: per-second refill rates,
 // burst of one window each.
 func NewLimiter(globalPerSec, perChatPerSec float64, c Clock) *Limiter {
+	if c == nil {
+		c = realClock{}
+	}
 	return &Limiter{global: globalPerSec, perChat: perChatPerSec,
 		clock: c, chatTok: map[uuid.UUID]float64{},
 		chatAt: map[uuid.UUID]time.Time{}}
@@ -122,6 +127,9 @@ type Dispatcher struct {
 	limit  *Limiter
 	rng    *rand.Rand
 
+	errMu   sync.Mutex
+	lastErr error
+
 	conn       *pgx.Conn
 	repo       *Repository
 	claimFn    func(context.Context) ([]Claim, error)
@@ -136,9 +144,17 @@ type Dispatcher struct {
 // every claim is its own short transaction.
 func NewDispatcher(conn *pgx.Conn, repo *Repository, ring *Keyring,
 	sender Sender, cfg DispatcherConfig, lim *Limiter) *Dispatcher {
+	// Production jitter seeds from system entropy per process —
+	// never a fixed sequence that would synchronize retry storms
+	// across restarts and instances.
+	var s1, s2 [8]byte
+	_, _ = crand.Read(s1[:])
+	_, _ = crand.Read(s2[:])
 	d := &Dispatcher{
 		cfg: cfg, sender: sender, ring: ring, clock: realClock{},
-		limit: lim, rng: rand.New(rand.NewPCG(1, 2)),
+		limit: lim, rng: rand.New(rand.NewPCG(
+			binary.LittleEndian.Uint64(s1[:]),
+			binary.LittleEndian.Uint64(s2[:]))),
 		conn: conn, repo: repo,
 	}
 	d.claimFn = func(ctx context.Context) ([]Claim, error) {
@@ -201,6 +217,24 @@ func NewDispatcher(conn *pgx.Conn, repo *Repository, ring *Keyring,
 // WithClock swaps the time source (tests).
 func (d *Dispatcher) WithClock(c Clock) *Dispatcher { d.clock = c; return d }
 
+func (d *Dispatcher) noteErr(err error) {
+	if err == nil {
+		return
+	}
+	d.errMu.Lock()
+	d.lastErr = err
+	d.errMu.Unlock()
+}
+
+// LastErr reports the most recent asynchronous failure — a failed
+// claim pass or a disposition write that left a row recoverable.
+// The row itself is never lost; the error is surfaced for operators.
+func (d *Dispatcher) LastErr() error {
+	d.errMu.Lock()
+	defer d.errMu.Unlock()
+	return d.lastErr
+}
+
 // Tick performs one bounded claim→send pass. Returns the number of
 // rows that reached a disposition (SENT/rescheduled/DEAD/SUPPRESSED).
 func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
@@ -216,7 +250,10 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			return done, ctx.Err()
 		}
-		d.process(ctx, cl)
+		if perr := d.process(ctx, cl); perr != nil {
+			d.noteErr(perr)
+			continue
+		}
 		done++
 	}
 	return done, nil
@@ -228,7 +265,9 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	for {
 		if _, err := d.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			// Transient claim failure — bounded tick cadence applies
-			// before the next pass, never a busy loop.
+			// before the next pass, never a busy loop; the error is
+			// still surfaced so a persistent outage is visible.
+			d.noteErr(err)
 		}
 		select {
 		case <-ctx.Done():
@@ -239,26 +278,45 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 }
 
 // process handles one claim through revalidate → send → disposition.
-// Every failure path leaves the row recoverable — never silently
-// consumed.
-func (d *Dispatcher) process(ctx context.Context, cl Claim) {
+// A nil return means the row reached a disposition; a non-nil return
+// means the row stays recoverable (LEASED → reaper, or PENDING via a
+// failed disposition write) and the error is surfaced to operators.
+func (d *Dispatcher) process(ctx context.Context, cl Claim) error {
 	// 1) Recipient fence — a fresh short read, not the claim tx.
 	gate, err := d.revalidate(ctx, cl)
-	if err != nil || !gate.Deliverable || !gate.VersionOK || !gate.OwnerActive {
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The channel row itself is gone — a genuine skip.
+			if _, serr := d.suppressFn(ctx, cl.ID, cl.LeaseToken,
+				"recipient_gone"); serr != nil {
+				return fmt.Errorf("suppress: %w", serr)
+			}
+			return nil
+		}
+		// Transient fence failure — leave the row LEASED for the
+		// reaper. A hiccup is not an eligibility verdict and must
+		// never terminalize the intent.
+		return fmt.Errorf("revalidate: %w", err)
+	}
+	if !gate.Deliverable || !gate.VersionOK || !gate.OwnerActive {
 		// Suppression is the AUTHORIZED skip: the row terminalizes
-		// SUPPRESSED so a downstream RECOVERY may proceed without
-		// fabricating a delivery.
-		_, _ = d.suppressFn(ctx, cl.ID, cl.LeaseToken,
-			"recipient_ineligible")
-		return
+		// SUPPRESSED; its children follow through the claim-time
+		// cascade rather than ever sending alone.
+		if _, serr := d.suppressFn(ctx, cl.ID, cl.LeaseToken,
+			"recipient_ineligible"); serr != nil {
+			return fmt.Errorf("suppress: %w", serr)
+		}
+		return nil
 	}
 
 	// 2) Rate limit — refusal reschedules, it is never a failure.
 	if d.limit != nil && !d.limit.Allow(cl.ChannelID) {
-		_, _ = d.reschedFn(ctx, cl.ID, cl.LeaseToken,
+		if _, rerr := d.reschedFn(ctx, cl.ID, cl.LeaseToken,
 			d.clock.Now().Add(d.cfg.Retry.MinDelay),
-			"RATE_LIMITED", d.cfg.Lease.MaxAttempts)
-		return
+			"RATE_LIMITED", d.cfg.Retry.MaxAttempts); rerr != nil {
+			return fmt.Errorf("reschedule: %w", rerr)
+		}
+		return nil
 	}
 
 	// 3) Bounded send outside every lock.
@@ -270,22 +328,33 @@ func (d *Dispatcher) process(ctx context.Context, cl Claim) {
 	// 4) Disposition by typed outcome.
 	switch {
 	case err == nil:
-		_, _ = d.ackFn(ctx, cl.ID, cl.LeaseToken)
+		if _, aerr := d.ackFn(ctx, cl.ID, cl.LeaseToken); aerr != nil {
+			return fmt.Errorf("ack: %w", aerr)
+		}
 
 	case isPermanent(err):
-		_, _ = d.deadFn(ctx, cl.ID, cl.LeaseToken, "PERMANENT")
+		if _, derr := d.deadFn(ctx, cl.ID, cl.LeaseToken, "PERMANENT"); derr != nil {
+			return fmt.Errorf("dead: %w", derr)
+		}
 
 	default:
 		delay := ComputeRetry(cl.Attempts, del.RetryAfter,
 			d.cfg.Retry, d.rng)
 		if Exhausted(cl.Attempts, cl.CreatedAt, d.clock.Now(),
 			d.cfg.Retry) {
-			_, _ = d.deadFn(ctx, cl.ID, cl.LeaseToken, "RETRY_EXHAUSTED")
-			return
+			if _, derr := d.deadFn(ctx, cl.ID, cl.LeaseToken,
+				"RETRY_EXHAUSTED"); derr != nil {
+				return fmt.Errorf("dead: %w", derr)
+			}
+			return nil
 		}
-		_, _ = d.reschedFn(ctx, cl.ID, cl.LeaseToken,
-			d.clock.Now().Add(delay), "RETRYABLE", d.cfg.Lease.MaxAttempts)
+		if _, rerr := d.reschedFn(ctx, cl.ID, cl.LeaseToken,
+			d.clock.Now().Add(delay), "RETRYABLE",
+			d.cfg.Retry.MaxAttempts); rerr != nil {
+			return fmt.Errorf("reschedule: %w", rerr)
+		}
 	}
+	return nil
 }
 
 func isPermanent(err error) bool {

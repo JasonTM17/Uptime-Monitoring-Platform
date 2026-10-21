@@ -127,11 +127,15 @@ type AuthConfig struct {
 	CSRFTokenTTL   time.Duration
 }
 
-// NotifyConfig gates notification delivery. The keyring contract is
-// reserved here; secret material is parsed only when the feature is
-// implemented (C44) — until then, enabling fails closed.
+// NotifyConfig gates notification delivery. When enabled, the
+// dispatcher needs the provider credential and the destination
+// keyring; all three are required together — partial config fails
+// closed at load, never at first send.
 type NotifyConfig struct {
-	Enabled bool
+	Enabled       bool
+	BotToken      string
+	KeyringRead   string
+	KeyringWriteV string
 }
 
 // Keyring resolves a key version to secret bytes. Reserved for the
@@ -242,6 +246,15 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		} else {
 			cfg.Notify.Enabled = v
 		}
+	}
+	if v, ok := lookup("TELEGRAM_BOT_TOKEN"); ok {
+		cfg.Notify.BotToken = v
+	}
+	if v, ok := lookup("CHANNEL_READ_KEYRING"); ok {
+		cfg.Notify.KeyringRead = v
+	}
+	if v, ok := lookup("CHANNEL_WRITE_KEY_VERSION"); ok {
+		cfg.Notify.KeyringWriteV = v
 	}
 
 	cfg.Database.URL = requiredSecret(lookup, errs, "DATABASE_URL")
@@ -513,7 +526,13 @@ func validate(cfg *Config, errs *LoadError) {
 	}
 
 	if cfg.Notify.Enabled {
-		errs.add("NOTIFICATIONS_ENABLED", "notification feature is gated until C44; secret parsing is not implemented")
+		if cfg.Notify.BotToken == "" {
+			errs.add("TELEGRAM_BOT_TOKEN", "required when NOTIFICATIONS_ENABLED=true")
+		}
+		if cfg.Notify.KeyringRead == "" || cfg.Notify.KeyringWriteV == "" {
+			errs.add("CHANNEL_READ_KEYRING+CHANNEL_WRITE_KEY_VERSION",
+				"required together when NOTIFICATIONS_ENABLED=true")
+		}
 	}
 }
 

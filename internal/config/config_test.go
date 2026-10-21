@@ -134,7 +134,7 @@ func TestValidate(t *testing.T) {
 		{"target timeout above 10s rejected", map[string]string{"CHECK_TARGET_TIMEOUT": "11s"}, "CHECK_TARGET_TIMEOUT"},
 		{"unknown profile rejected", map[string]string{"APP_ENV": "staging"}, "APP_ENV"},
 		{"invalid proxy CIDR rejected", map[string]string{"TRUSTED_PROXIES": "10.0.0.0"}, "TRUSTED_PROXIES"},
-		{"notifications gated until C44", map[string]string{"NOTIFICATIONS_ENABLED": "true"}, "NOTIFICATIONS_ENABLED"},
+		{"notifications need provider secrets", map[string]string{"NOTIFICATIONS_ENABLED": "true"}, "TELEGRAM_BOT_TOKEN"},
 		{"non-integer rejected", map[string]string{"ENGINE_WORKERS": "many"}, "ENGINE_WORKERS"},
 		{"port zero rejected", map[string]string{"HTTP_PORT": "0"}, "HTTP_PORT"},
 		{"hosted without origins fails closed", map[string]string{"APP_ENV": "hosted"}, "TRUSTED_ORIGINS"},

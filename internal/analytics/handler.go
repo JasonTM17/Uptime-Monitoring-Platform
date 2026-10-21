@@ -67,7 +67,7 @@ func principal(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
 	p, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
 		httpserver.WriteError(w, r, http.StatusUnauthorized,
-			httpserver.ErrForbidden, "authentication required")
+			httpserver.ErrUnauth, "authentication required")
 	}
 	return p, ok
 }
