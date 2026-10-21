@@ -121,6 +121,28 @@ func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 func WithPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 	actor ActorRef, permission string, now time.Time,
 	fn func(tx pgx.Tx, perms map[string]bool) error) error {
+	return withPrivilegedTxUsers(ctx, conn, actor, nil, permission, now,
+		func(tx pgx.Tx, _ []LockedUser, perms map[string]bool) error {
+			return fn(tx, perms)
+		})
+}
+
+// WithPrivilegedTxUsers is WithPrivilegedTx for mutations that also
+// touch subject user rows: every user — actor first in the predicate
+// sense — is locked in ascending UUID order inside one transaction.
+// fn additionally receives the locked subject rows (actor excluded).
+func WithPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
+	actor ActorRef, targets []uuid.UUID, permission string, now time.Time,
+	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error) error {
+	return withPrivilegedTxUsers(ctx, conn, actor, targets, permission, now, fn)
+}
+
+// withPrivilegedTxUsers is the shared implementation. Subjects are
+// locked together with the actor in ascending order so the global
+// lock order (anchor → users asc → …) is never violated.
+func withPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
+	actor ActorRef, targets []uuid.UUID, permission string, now time.Time,
+	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error) error {
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -131,9 +153,22 @@ func WithPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 	if err := LockAnchor(ctx, tx); err != nil {
 		return err
 	}
-	u, err := LockUser(ctx, tx, actor.UserID)
+	ids := append([]uuid.UUID{actor.UserID}, targets...)
+	locked, err := LockUsers(ctx, tx, ids...)
 	if err != nil {
 		return err
+	}
+	var u LockedUser
+	var subjects []LockedUser
+	for _, lu := range locked {
+		if lu.ID == actor.UserID {
+			u = lu
+		} else {
+			subjects = append(subjects, lu)
+		}
+	}
+	if u.ID != actor.UserID {
+		return ErrActorRevoked
 	}
 	if u.Status != "ACTIVE" || u.SecurityVersion != actor.SecurityVersion {
 		return ErrActorRevoked
@@ -165,7 +200,7 @@ func WithPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 	if !perms[permission] {
 		return ErrForbidden
 	}
-	if err := fn(tx, perms); err != nil {
+	if err := fn(tx, subjects, perms); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

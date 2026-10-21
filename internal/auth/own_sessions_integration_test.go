@@ -4,7 +4,11 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httputil"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +102,81 @@ func TestOwnSessionRoutes(t *testing.T) {
 	t.Run("nonexistent id is ErrNotFound", func(t *testing.T) {
 		if err := svc.RevokeOwnSession(ctx, owner.ID, uuid.New()); !errors.Is(err, auth.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+}
+
+// TestOwnRevokeAllRoutes covers the step-up protected "log out
+// everywhere" route end to end on real HTTP: recent-auth gate, wrong
+// password, all-sessions revocation, cookie clear, and owner scope.
+func TestOwnRevokeAllRoutes(t *testing.T) {
+	f := newFixture(t)
+	defer f.cleanup()
+	email := f.email("revall")
+	c := f.newClient()
+	c.challenge()
+	if rec := c.register(email); rec.Code != http.StatusCreated {
+		t.Fatalf("register %d", rec.Code)
+	}
+	if rec := c.login(email); rec.Code != http.StatusOK {
+		t.Fatalf("login %d", rec.Code)
+	}
+	// A second live session for the same user proves "all", not "one".
+	c2 := f.newClient()
+	c2.challenge()
+	if rec := c2.login(email); rec.Code != http.StatusOK {
+		t.Fatalf("second login %d", rec.Code)
+	}
+
+	t.Run("unauthenticated is 401", func(t *testing.T) {
+		anon := f.newClient()
+		anon.challenge()
+		rec := anon.do(http.MethodPost, "/auth/sessions/revoke-all", `{}`, true)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status %d", rec.Code)
+		}
+	})
+
+	t.Run("missing recent auth is 403", func(t *testing.T) {
+		rec := c.do(http.MethodPost, "/auth/sessions/revoke-all", `{}`, true)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status %d want 403", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "REAUTH_REQUIRED") {
+			t.Fatalf("body %s", rec.Body.String())
+		}
+		// Sessions still alive.
+		if rec := c.do(http.MethodGet, "/auth/me", "", false); rec.Code != http.StatusOK {
+			t.Fatal("session died despite denial")
+		}
+	})
+
+	t.Run("wrong password reauth is uniform 401", func(t *testing.T) {
+		b, _ := json.Marshal(map[string]string{"password": "wrong"})
+		rec := c.do(http.MethodPost, "/auth/reauth", string(b), true)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status %d", rec.Code)
+		}
+	})
+
+	t.Run("reauth then revoke-all kills every session", func(t *testing.T) {
+		b, _ := json.Marshal(map[string]string{"password": validPW})
+		rec := c.do(http.MethodPost, "/auth/reauth", string(b), true)
+		if rec.Code != http.StatusOK {
+			b, _ := httputil.DumpResponse(rec.Result(), true)
+			t.Fatalf("reauth %d %s", rec.Code, b)
+		}
+		rec = c.do(http.MethodPost, "/auth/sessions/revoke-all", `{}`, true)
+		if rec.Code != http.StatusOK {
+			b, _ := httputil.DumpResponse(rec.Result(), true)
+			t.Fatalf("revoke-all %d %s", rec.Code, b)
+		}
+		// Both sessions are dead now — cookies replay 401.
+		if rec := c.do(http.MethodGet, "/auth/me", "", false); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("old session alive: %d", rec.Code)
+		}
+		if rec := c2.do(http.MethodGet, "/auth/me", "", false); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("second session alive: %d", rec.Code)
 		}
 	})
 }

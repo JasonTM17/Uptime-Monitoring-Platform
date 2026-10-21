@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 const validPW = "a very long password!"
@@ -72,7 +73,7 @@ func (f *fakeStore) FindUserByEmail(_ context.Context, email string) (User, erro
 	}
 	return User{}, ErrNotFound
 }
-func (f *fakeStore) findByID(id uuid.UUID) (User, error) {
+func (f *fakeStore) FindUserByID(_ context.Context, id uuid.UUID) (User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if u, ok := f.byID[id]; ok {
@@ -96,8 +97,27 @@ func newUserSessionStore() *userSessionStore {
 	ss := newFakeSessions()
 	// Session fake resolves owners through the user fake's directory —
 	// one source of truth for status/security_version.
-	ss.findUser = fs.findByID
+	ss.findUser = func(id uuid.UUID) (User, error) { return fs.FindUserByID(context.Background(), id) }
 	return &userSessionStore{fakeStore: fs, fakeSessions: ss}
+}
+
+// RevokeAllSessionsAndBump composes the session revoke with the
+// shared user directory's security-version bump — the fake keeps the
+// same observable contract as the repository pair.
+func (s *userSessionStore) RevokeAllSessionsAndBump(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (int64, error) {
+	n, err := s.fakeSessions.RevokeAllSessionsAndBump(ctx, tx, userID)
+	if err != nil {
+		return n, err
+	}
+	s.fakeStore.mu.Lock()
+	defer s.fakeStore.mu.Unlock()
+	if u, ok := s.byID[userID]; ok {
+		u.SecurityVersion++
+		u.Version++
+		s.byKey[u.Email] = u
+		s.byID[u.ID] = u
+	}
+	return n, nil
 }
 
 // putUser mutates the shared directory in both indexes (tests emulate
@@ -173,12 +193,16 @@ func TestRegister(t *testing.T) {
 
 	t.Run("configured owner monitor limit stamped on row", func(t *testing.T) {
 		store := newFakeStore()
-		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg(), 42)
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions {
+			s := newFakeSessions()
+			s.findUser = func(id uuid.UUID) (User, error) { return store.FindUserByID(context.Background(), id) }
+			return s
+		}()}, &countingHasher{}, testCfg(), 42)
 		u, err := svc.Register(ctx, RegisterInput{Email: "cap@x.co", Password: validPW})
 		if err != nil {
 			t.Fatalf("register: %v", err)
 		}
-		row, err := store.findByID(u.ID)
+		row, err := store.FindUserByID(context.Background(), u.ID)
 		if err != nil {
 			t.Fatalf("lookup: %v", err)
 		}
@@ -189,7 +213,11 @@ func TestRegister(t *testing.T) {
 
 	t.Run("canonical-case duplicate maps to ErrEmailTaken", func(t *testing.T) {
 		store := newFakeStore()
-		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg(), 10)
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions {
+			s := newFakeSessions()
+			s.findUser = func(id uuid.UUID) (User, error) { return store.FindUserByID(context.Background(), id) }
+			return s
+		}()}, &countingHasher{}, testCfg(), 10)
 		if _, err := svc.Register(ctx, RegisterInput{Email: "dupe@x.co", Password: validPW}); err != nil {
 			t.Fatalf("first register: %v", err)
 		}

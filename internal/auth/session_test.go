@@ -144,6 +144,34 @@ func (f *fakeSessions) FindSessionForUpdate(_ context.Context, _ pgx.Tx, id uuid
 }
 func (f *fakeSessions) touches() int { f.mu.Lock(); defer f.mu.Unlock(); return f.touchN }
 
+func (f *fakeSessions) MarkRecentAuth(_ context.Context, _ pgx.Tx, id uuid.UUID, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for h, s := range f.byHash {
+		if s.ID == id && s.RevokedAt == nil {
+			s.RecentAuthAt = &now
+			f.byHash[h] = s
+			return nil
+		}
+	}
+	return ErrInvalidSession
+}
+
+func (f *fakeSessions) RevokeAllSessionsAndBump(_ context.Context, _ pgx.Tx, userID uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	now := time.Now()
+	for h, s := range f.byHash {
+		if s.UserID == userID && s.RevokedAt == nil {
+			s.RevokedAt = &now
+			f.byHash[h] = s
+			n++
+		}
+	}
+	return n, nil
+}
+
 func TestSessionToken(t *testing.T) {
 	t.Run("token shape and hash", func(t *testing.T) {
 		tok, err := newSessionToken()

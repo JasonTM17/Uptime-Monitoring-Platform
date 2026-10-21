@@ -43,6 +43,7 @@ func (e *FieldError) Error() string { return "validation failed" }
 type UserStore interface {
 	CreateUser(ctx context.Context, email, passwordHash, displayName string, monitorLimit int) (User, error)
 	FindUserByEmail(ctx context.Context, email string) (User, error)
+	FindUserByID(ctx context.Context, id uuid.UUID) (User, error)
 }
 
 // PasswordHasher is the KDF seam — *Hasher satisfies it. Tests use a

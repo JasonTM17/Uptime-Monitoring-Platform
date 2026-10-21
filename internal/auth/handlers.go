@@ -62,6 +62,10 @@ func (h *Handler) Mux() *http.ServeMux {
 		mux.HandleFunc("POST /auth/logout", h.csrf.RequireCSRF(h.logout))
 		mux.HandleFunc("DELETE /auth/sessions/{id}",
 			h.csrf.RequireCSRF(h.svc.RequireSession(h.revokeOwnSession)))
+		mux.HandleFunc("POST /auth/reauth",
+			h.csrf.RequireCSRF(h.svc.RequireSession(h.reauth)))
+		mux.HandleFunc("POST /auth/sessions/revoke-all",
+			h.csrf.RequireCSRF(h.svc.RequireSession(h.revokeAllOwnSessions)))
 	} else {
 		// csrf==nil is a tests-only wiring; production always supplies a
 		// manager (cmd/api constructs one unconditionally).
@@ -69,18 +73,33 @@ func (h *Handler) Mux() *http.ServeMux {
 		mux.HandleFunc("POST /auth/login", h.login)
 		mux.HandleFunc("POST /auth/logout", h.logout)
 		mux.HandleFunc("DELETE /auth/sessions/{id}", h.svc.RequireSession(h.revokeOwnSession))
+		mux.HandleFunc("POST /auth/reauth", h.svc.RequireSession(h.reauth))
+		mux.HandleFunc("POST /auth/sessions/revoke-all",
+			h.svc.RequireSession(h.revokeAllOwnSessions))
 	}
 	for _, p := range []struct{ path, allow string }{
 		{"/auth/csrf", http.MethodGet}, {"/auth/me", http.MethodGet},
 		{"/auth/sessions", http.MethodGet}, {"/auth/register", http.MethodPost},
 		{"/auth/login", http.MethodPost}, {"/auth/logout", http.MethodPost},
 		{"/auth/sessions/{id}", http.MethodDelete},
+		{"/auth/reauth", http.MethodPost},
 	} {
 		mux.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", p.allow)
 			httpserver.WriteError(w, r, http.StatusMethodNotAllowed,
 				httpserver.ErrMethod, "method not allowed")
 		})
+	}
+	// Method-scoped 405s on the literal: a bare registration would
+	// overlap DELETE /auth/sessions/{id} (literal path, more methods).
+	for _, m := range []string{http.MethodGet, http.MethodPut,
+		http.MethodDelete, http.MethodPatch} {
+		mux.HandleFunc(m+" /auth/sessions/revoke-all",
+			func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Allow", http.MethodPost)
+				httpserver.WriteError(w, r, http.StatusMethodNotAllowed,
+					httpserver.ErrMethod, "method not allowed")
+			})
 	}
 	mux.HandleFunc("/", h.notFound)
 	return mux

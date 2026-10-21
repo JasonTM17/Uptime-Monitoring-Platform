@@ -315,3 +315,42 @@ func (r *Repository) RevokeSession(ctx context.Context, id uuid.UUID) error {
 	}
 	return nil
 }
+
+// MarkRecentAuth stamps recent_auth_at on a live session inside the
+// caller's transaction — Reauthenticate uses it after the password
+// verify under the actor lock.
+func (r *Repository) MarkRecentAuth(ctx context.Context, tx pgx.Tx,
+	sessionID uuid.UUID, now time.Time) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE uptime.sessions SET recent_auth_at=$2
+		WHERE id=$1 AND revoked_at IS NULL`, sessionID, now)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidSession
+	}
+	return nil
+}
+
+// RevokeAllSessionsAndBump invalidates every session a user holds and
+// bumps the security epoch — one atomic "log out everywhere". The
+// caller already holds the user row lock; this composes the two writes
+// inside that transaction.
+func (r *Repository) RevokeAllSessionsAndBump(ctx context.Context, tx pgx.Tx,
+	userID uuid.UUID) (int64, error) {
+	if _, err := tx.Exec(ctx, `
+		UPDATE uptime.users
+		SET security_version=security_version+1, version=version+1,
+		    updated_at=now()
+		WHERE id=$1`, userID); err != nil {
+		return 0, mapErr(err)
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE uptime.sessions SET revoked_at=clock_timestamp()
+		WHERE user_id=$1 AND revoked_at IS NULL`, userID)
+	if err != nil {
+		return 0, mapErr(err)
+	}
+	return tag.RowsAffected(), nil
+}

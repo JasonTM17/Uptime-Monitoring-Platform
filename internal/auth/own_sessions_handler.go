@@ -147,3 +147,76 @@ func (h *Handler) revokeOwnSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// reauth verifies the current password and stamps recent_auth_at on
+// this session — the step-up receipt for sensitive actions. The body
+// carries only {password}; the session cookie supplies identity.
+func (h *Handler) reauth(w http.ResponseWriter, r *http.Request) {
+	p, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, http.StatusUnauthorized,
+			httpserver.ErrUnauth, "authentication required")
+		return
+	}
+	var in struct {
+		Password string `json:"password"`
+	}
+	if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {
+		httpserver.WriteErrorFields(w, r, apiErr.Status, apiErr.Code, apiErr.Msg, apiErr.Fields)
+		return
+	}
+	err := h.svc.Reauthenticate(r.Context(), p, in.Password)
+	switch {
+	case err == nil:
+		httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{
+			"reauthenticated_until": time.Now().Add(RecentAuthTTL).UTC(),
+		})
+	default:
+		var rl *RateLimitedError
+		switch {
+		case errors.As(err, &rl):
+			w.Header().Set("Retry-After",
+				strconv.Itoa(int(rl.RetryAfter.Seconds())+1))
+			httpserver.WriteError(w, r, http.StatusTooManyRequests,
+				httpserver.ErrRateLimited, "too many attempts")
+		case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrInvalidSession):
+			// Uniform 401 — wrong password and dead session are
+			// indistinguishable on the wire.
+			httpserver.WriteError(w, r, http.StatusUnauthorized,
+				httpserver.ErrUnauth, "invalid credentials")
+		default:
+			h.internalError(w, r, err)
+		}
+	}
+}
+
+// revokeAllOwnSessions ends every session the caller holds. Requires
+// recent authentication; clears the current cookie on success.
+func (h *Handler) revokeAllOwnSessions(w http.ResponseWriter, r *http.Request) {
+	p, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, http.StatusUnauthorized,
+			httpserver.ErrUnauth, "authentication required")
+		return
+	}
+	n, err := h.svc.RevokeAllOwnSessions(r.Context(), p)
+	switch {
+	case err == nil:
+		http.SetCookie(w, &http.Cookie{
+			Name: sessionCookieName, Value: "", Path: "/",
+			HttpOnly: true, Secure: h.secure,
+			SameSite: http.SameSiteLaxMode, MaxAge: -1,
+		})
+		httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{
+			"revoked_count": n,
+		})
+	case errors.Is(err, ErrReauthRequired):
+		httpserver.WriteError(w, r, http.StatusForbidden,
+			httpserver.ErrReauth, "recent authentication required")
+	case errors.Is(err, ErrInvalidSession):
+		httpserver.WriteError(w, r, http.StatusUnauthorized,
+			httpserver.ErrUnauth, "authentication required")
+	default:
+		h.internalError(w, r, err)
+	}
+}

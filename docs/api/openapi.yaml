@@ -270,6 +270,79 @@ paths:
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /auth/reauth:
+    post:
+      tags: [auth]
+      summary: Verify password and stamp recent-auth on this session
+      operationId: reauth
+      description: Step-up receipt for sensitive actions. The
+        server-side `recent_auth_at` is valid for 5 minutes; a client
+        can never set it directly. Uniform 401 for wrong password.
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Recent-auth stamped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [reauthenticated_until]
+                    properties:
+                      reauthenticated_until: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/sessions/revoke-all:
+    post:
+      tags: [auth]
+      summary: Revoke every session the caller owns (log out everywhere)
+      operationId: revokeAllOwnSessions
+      description: Requires recent authentication inside the 5-minute
+        step-up window. Bumps the security epoch, revokes all sessions
+        including the current one, and clears the session cookie.
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      responses:
+        '200':
+          description: All sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [revoked_count]
+                    properties:
+                      revoked_count: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403':
+          description: CSRF rejected OR recent authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                reauth:
+                  value:
+                    error:
+                      code: REAUTH_REQUIRED
+                      message: recent authentication required
+
   /monitors:
     post:
       tags: [monitors]

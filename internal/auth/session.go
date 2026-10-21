@@ -95,6 +95,12 @@ type SessionStore interface {
 	// landing between authenticate and commit cannot slip a mutation
 	// through the lock.
 	FindSessionForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Session, error)
+	// MarkRecentAuth stamps the server-side reauthentication time on a
+	// live session inside the caller's transaction.
+	MarkRecentAuth(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, now time.Time) error
+	// RevokeAllSessionsAndBump ends every session and advances the
+	// security epoch atomically — caller holds the user lock.
+	RevokeAllSessionsAndBump(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (int64, error)
 }
 
 // CreateSession issues a new session for userID. The repository call
