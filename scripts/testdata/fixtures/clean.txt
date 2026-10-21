@@ -1,0 +1,5 @@
+# Clean fixture: ordinary text that must not trigger any rule.
+const greeting = "hello world";
+// The word "password" alone is not a secret:
+// password=<type it yourself>
+TELEGRAM_BOT_TOKEN=

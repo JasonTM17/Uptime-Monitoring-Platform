@@ -1,0 +1,10 @@
+# Fixture for the staged-secrets scanner self-test.
+# Every value below is a syntactically valid but inert fake; this file lives
+# under scripts/testdata/ which the scanner exempts from real scans.
+
+TELEGRAM_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
+DATABASE_URL=postgres://app:Tr0ub4dor&3xtra@db.internal:5432/uptime
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMw==
+-----END OPENSSH PRIVATE KEY-----
+api_key = "AbCdEfGhIjKlMnOpQrSt1234"

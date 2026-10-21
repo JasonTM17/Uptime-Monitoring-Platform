@@ -12,6 +12,8 @@ endpoints, runtime screenshots hay public deployment để kiểm chứng.
   drift, prerequisites Windows/Linux.
 - [Runbook: local và test databases](runbooks/local-database.md):
   Compose profiles, migration job, safe teardown rules.
+- [Testing và verification](testing.md): local gate commands, check
+  semantics, CI honesty.
 
 ## Private planning material
 
