@@ -36,7 +36,8 @@ func testPrincipal() auth.Principal {
 
 func TestRolesRouteTable(t *testing.T) {
 	gate := fakeGate{principal: testPrincipal()}
-	h := admin.NewRolesHandler(nil, gate, nil, 1<<16, nil)
+	h := admin.NewRolesHandler(nil, gate, nil, 1<<16,
+		admin.QuotaCeilings{RetainedOwner: 50, ColumnBound: 10000}, nil)
 	mux := h.Mux()
 
 	// Wrong methods get the envelope's 405 + Allow.

@@ -1147,6 +1147,57 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
+  /admin/users/{id}/revoke-sessions:
+    post:
+      tags: [admin]
+      summary: Revoke every live session of a user (sessions:manage)
+      operationId: revokeUserSessions
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Sessions revoked (count only — no tokens or client data)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/users/{id}/quota:
+    patch:
+      tags: [admin]
+      summary: Set a user's live monitor cap (quotas:manage — SUPER_ADMIN only)
+      operationId: setUserQuota
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Cap updated (bounded counts, no resource data)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cap below locked usage or above pinned ceilings; nothing is auto-deleted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error:
+                  code: QUOTA_EXCEEDED
+                  message: quota cap below current usage
+                request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
 components:
   parameters:
     IdempotencyKey:

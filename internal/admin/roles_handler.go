@@ -29,22 +29,24 @@ type RoleAuthGate interface {
 // the context principal is only a snapshot — authorization is
 // re-derived under the security anchor inside each guarded recipe.
 type RolesHandler struct {
-	conn    Beginner
-	auth    RoleAuthGate
-	csrf    *auth.CSRFManager
-	maxBody int64
-	log     *slog.Logger
-	now     func() time.Time
+	conn     Beginner
+	auth     RoleAuthGate
+	csrf     *auth.CSRFManager
+	maxBody  int64
+	log      *slog.Logger
+	now      func() time.Time
+	ceilings QuotaCeilings
 }
 
 // NewRolesHandler wires the role-management route table.
 func NewRolesHandler(conn Beginner, gate RoleAuthGate,
-	csrf *auth.CSRFManager, maxBody int64, log *slog.Logger) *RolesHandler {
+	csrf *auth.CSRFManager, maxBody int64, ceilings QuotaCeilings,
+	log *slog.Logger) *RolesHandler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &RolesHandler{conn: conn, auth: gate, csrf: csrf,
-		maxBody: maxBody, log: log, now: time.Now}
+		maxBody: maxBody, log: log, now: time.Now, ceilings: ceilings}
 }
 
 // Mux returns the admin role-management routes. The composition root
@@ -75,9 +77,17 @@ func (h *RolesHandler) Mux() *http.ServeMux {
 	}
 	mux.HandleFunc("POST /admin/users/{id}/suspend", guard(h.suspend))
 	mux.HandleFunc("POST /admin/users/{id}/restore", guard(h.restore))
+	mux.HandleFunc("POST /admin/users/{id}/revoke-sessions", guard(h.revokeSessions))
+	mux.HandleFunc("PATCH /admin/users/{id}/quota", guard(h.setQuota))
 	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /admin/users/{id}/suspend", h.methodNotAllowed("POST"))
 		mux.HandleFunc(m+" /admin/users/{id}/restore", h.methodNotAllowed("POST"))
+	}
+	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
+		mux.HandleFunc(m+" /admin/users/{id}/revoke-sessions", h.methodNotAllowed("POST"))
+	}
+	for _, m := range []string{"GET", "POST", "PUT", "DELETE"} {
+		mux.HandleFunc(m+" /admin/users/{id}/quota", h.methodNotAllowed("PATCH"))
 	}
 	mux.HandleFunc("/admin/", h.notFound)
 	return mux
@@ -242,6 +252,58 @@ func (h *RolesHandler) restore(w http.ResponseWriter, r *http.Request) {
 	h.accountTransition(RestoreAccount)(w, r)
 }
 
+func (h *RolesHandler) revokeSessions(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.PrincipalFromContext(r.Context())
+	target, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, http.StatusBadRequest,
+			httpserver.ErrBadRequest, "invalid user id")
+		return
+	}
+	body, ok := h.readBody(w, r)
+	if !ok {
+		return
+	}
+	var in RevokeSessionsInput
+	if apiErr := httpserver.DecodeBodyBytes(body, &in); apiErr != nil {
+		httpserver.WriteError(w, r, apiErr.Status, apiErr.Code, apiErr.Msg)
+		return
+	}
+	res, err := RevokeUserSessions(r.Context(), h.conn, actorRef(p), target, in,
+		r.Header.Get("Idempotency-Key"), body, h.now())
+	if err != nil {
+		h.writeErr(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, res.Status, res.Response)
+}
+
+func (h *RolesHandler) setQuota(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.PrincipalFromContext(r.Context())
+	target, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, http.StatusBadRequest,
+			httpserver.ErrBadRequest, "invalid user id")
+		return
+	}
+	body, ok := h.readBody(w, r)
+	if !ok {
+		return
+	}
+	var in QuotaInput
+	if apiErr := httpserver.DecodeBodyBytes(body, &in); apiErr != nil {
+		httpserver.WriteError(w, r, apiErr.Status, apiErr.Code, apiErr.Msg)
+		return
+	}
+	res, err := SetUserQuota(r.Context(), h.conn, h.ceilings, actorRef(p),
+		target, in, r.Header.Get("Idempotency-Key"), body, h.now())
+	if err != nil {
+		h.writeErr(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, res.Status, res.Response)
+}
+
 // writeErr maps the admin error lattice onto the shared envelope.
 // Codes come straight from the contract: auth failures → 401,
 // permission/step-up → 403, version/idempotency/last-superadmin →
@@ -282,6 +344,9 @@ func (h *RolesHandler) writeErr(w http.ResponseWriter, r *http.Request, err erro
 	case errors.Is(err, ErrStaleEpoch), errors.Is(err, ErrIdempotencyConflict):
 		httpserver.WriteError(w, r, http.StatusConflict,
 			httpserver.ErrConflict, "conflicting or stale version")
+	case errors.As(err, new(*QuotaConflict)):
+		httpserver.WriteError(w, r, http.StatusConflict,
+			httpserver.ErrQuota, "quota cap below current usage")
 	case errors.Is(err, ErrSubjectRevoked):
 		httpserver.WriteError(w, r, http.StatusNotFound,
 			httpserver.ErrNotFound, "subject not found")

@@ -129,7 +129,10 @@ func run() error {
 	// principal is only a snapshot. The shared pool conn is safe: every
 	// privileged recipe runs inside one transaction.
 	adminHandler := admin.NewRolesHandler(pool, svc, csrfMgr,
-		cfg.HTTP.MaxJSONBodyBytes, log)
+		cfg.HTTP.MaxJSONBodyBytes, admin.QuotaCeilings{
+			RetainedOwner: cfg.Alloc.RetainedMonitorsOwner,
+			ColumnBound:   10000,
+		}, log)
 
 	// Engine: dedicated owner conn + assembled lifecycle. A start
 	// failure is NOT fatal — another instance may legitimately hold
