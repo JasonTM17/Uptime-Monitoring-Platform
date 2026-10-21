@@ -12,6 +12,7 @@ import (
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/monitor"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/logger"
@@ -47,6 +48,16 @@ func run() error {
 	repo := auth.NewRepository(pool, cfg.Database.QueryTimeout)
 	hasher := auth.NewHasher(cfg.Auth)
 	svc := auth.NewService(repo, hasher, cfg.Auth, cfg.Engine.OwnerMonitorLimit)
+
+	// Seed the quota singleton (F03): the row is the global live-cap
+	// authority — config only supplies the first value, ON CONFLICT
+	// keeps an operator-adjusted budget. Monitor creation fails closed
+	// if this row is absent, so a failed ensure must not stay silent.
+	monRepo := monitor.NewRepository(pool, cfg.Database.QueryTimeout)
+	if err := monRepo.EnsureQuotaBudget(ctx, cfg.Engine.GlobalMonitorLimit); err != nil {
+		log.Error("quota budget ensure failed; monitor create will refuse",
+			"err", err)
+	}
 	secure := cfg.Profile == config.ProfileHosted
 	if secure && len(cfg.HTTP.TrustedProxies) == 0 {
 		// With no trusted proxy, every login attempt lands in one
