@@ -53,3 +53,27 @@ expected decisions independently of the implementation, sourced from
 the IANA special-purpose registries (dates recorded in the file). The
 integrity harness proves the oracle is well-formed; implementation
 parity is proven in C28.
+
+## Observed verification evidence (C32 snapshot)
+
+- `go test ./internal/checker -count=1` — PASS (~8.6s): full fixture
+  oracle, pinned-dial recorder, TLS CA composition, bounded body,
+  cleanup counters, cancel/rebind/redirect negatives, deadline
+  taxonomy.
+- `go test -race ./internal/checker -count=1` — PASS (~8.9s): 16-way
+  concurrent checks, isolated target transports, zero reports.
+- Zero-dial oracle proven non-vacuous by `TestUnsafeSubstituteWouldFail`:
+  a deliberately unsafe validate-then-default-dial composition DOES
+  reach the rebound private answer — the assertions discriminate the
+  pinned path from the unsafe one.
+- Response body cap: 64 KiB read bound; body is never persisted and
+  never surfaces in an Observation. `Content-Length` is never trusted
+  for allocation.
+- Deadline taxonomy: DNS→`DNS_ERROR`, transport→`CONNECT_ERROR`,
+  x509→`TLS_ERROR`, budget expiry at any phase→`TIMEOUT`, caller
+  cancel at any phase→`CANCELED`, anything else→`INTERNAL_ERROR`.
+  Only the first six are eligible health evidence; policy/cancel/
+  internal can never move a failure streak.
+- Limits: the boundary proves the *dialed destination*, not OS egress
+  isolation. Unit/integration evidence only — not a network sandbox
+  proof.

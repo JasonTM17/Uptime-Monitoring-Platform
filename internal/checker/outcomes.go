@@ -52,10 +52,14 @@ func ClassifyError(err error) Outcome {
 	// Transport-level failures after DNS: refused, reset, no route,
 	// TLS handshake records that aren't verification errors, etc.
 	var opErr *net.OpError
-	var urlErr *url.Error
-	if errors.As(err, &opErr) || errors.As(err, &urlErr) ||
-		errors.Is(err, syscall.ECONNREFUSED) {
+	if errors.As(err, &opErr) || errors.Is(err, syscall.ECONNREFUSED) {
 		return OutcomeConnectError
+	}
+	// An http client's *url.Error is only a wrapper — classify on the
+	// inner error so a non-network failure stays internal, not "connect".
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return ClassifyError(urlErr.Err)
 	}
 	return OutcomeInternalError
 }

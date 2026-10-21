@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 )
 
@@ -103,10 +104,13 @@ func TestEncodedLiteralDenied(t *testing.T) {
 type fakeResolver struct {
 	answers []net.IP
 	err     error
+	mu      sync.Mutex
 	calls   int
 }
 
 func (f *fakeResolver) LookupIP(_ context.Context, _ string) ([]net.IP, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	return f.answers, f.err
 }
