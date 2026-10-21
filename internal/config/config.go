@@ -34,6 +34,7 @@ type Config struct {
 	Admission AdmissionConfig
 	Alloc     AllocConfig
 	Notify    NotifyConfig
+	Auth      AuthConfig
 }
 
 // HTTPConfig bounds the public HTTP server.
@@ -90,6 +91,18 @@ type AllocConfig struct {
 	PendingChannelsGlobal  int
 	RetainedChannelsOwner  int
 	RetainedChannelsGlobal int
+}
+
+// AuthConfig bounds password hashing. Argon2id cost is the project
+// initial candidate (64MiB/time3/p1); the OWASP floor (19MiB/time2/p1) is
+// the validation minimum, never an automatic downgrade target.
+type AuthConfig struct {
+	ArgonMemoryKiB   uint32
+	ArgonTime        uint32
+	ArgonParallelism uint8
+	ArgonSaltLen     uint32
+	ArgonKeyLen      uint32
+	HashWorkers      int
 }
 
 // NotifyConfig gates notification delivery. The keyring contract is
@@ -162,6 +175,13 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envInt32(lookup, errs, "DB_MAX_CONNS", &cfg.Database.MaxConns)
 	envInt32(lookup, errs, "DB_MIN_CONNS", &cfg.Database.MinConns)
 	envDuration(lookup, errs, "DB_QUERY_TIMEOUT", &cfg.Database.QueryTimeout)
+
+	envUint32(lookup, errs, "ARGON2_MEMORY_KIB", &cfg.Auth.ArgonMemoryKiB)
+	envUint32(lookup, errs, "ARGON2_TIME", &cfg.Auth.ArgonTime)
+	envUint8(lookup, errs, "ARGON2_PARALLELISM", &cfg.Auth.ArgonParallelism)
+	envUint32(lookup, errs, "ARGON2_SALT_LEN", &cfg.Auth.ArgonSaltLen)
+	envUint32(lookup, errs, "ARGON2_KEY_LEN", &cfg.Auth.ArgonKeyLen)
+	envInt(lookup, errs, "AUTH_HASH_WORKERS", &cfg.Auth.HashWorkers)
 
 	envInt(lookup, errs, "ENGINE_WORKERS", &cfg.Engine.Workers)
 	envInt(lookup, errs, "ENGINE_QUEUE_SIZE", &cfg.Engine.QueueSize)
@@ -240,6 +260,7 @@ func localDefaults() Config {
 			RetainedChannelsOwner:  10,
 			RetainedChannelsGlobal: 100,
 		},
+		Auth: defaultAuthConfig(),
 	}
 }
 
@@ -280,6 +301,21 @@ func hostedDefaults() Config {
 			RetainedChannelsOwner:  4,
 			RetainedChannelsGlobal: 20,
 		},
+		Auth: defaultAuthConfig(),
+	}
+}
+
+// defaultAuthConfig returns the Argon2id initial candidate: 64MiB /
+// time 3 / parallelism 1, 16-byte salt, 32-byte key, at most 2 hash
+// workers (bounded admission before expensive KDF work).
+func defaultAuthConfig() AuthConfig {
+	return AuthConfig{
+		ArgonMemoryKiB:   64 * 1024,
+		ArgonTime:        3,
+		ArgonParallelism: 1,
+		ArgonSaltLen:     16,
+		ArgonKeyLen:      32,
+		HashWorkers:      2,
 	}
 }
 
@@ -337,6 +373,19 @@ func validate(cfg *Config, errs *LoadError) {
 	bound(errs, "PENDING_CHANNELS_GLOBAL_LIMIT", cfg.Alloc.PendingChannelsGlobal, 1, 10000)
 	bound(errs, "RETAINED_CHANNELS_OWNER_LIMIT", cfg.Alloc.RetainedChannelsOwner, 1, 10000)
 	bound(errs, "RETAINED_CHANNELS_GLOBAL_LIMIT", cfg.Alloc.RetainedChannelsGlobal, 1, 10000)
+
+	// Argon2id: never weaker than the OWASP floor (19MiB/t2/p1), never
+	// so large that a config typo becomes a memory bomb.
+	if cfg.Auth.ArgonMemoryKiB < 19*1024 || cfg.Auth.ArgonMemoryKiB > 1024*1024 {
+		errs.add("ARGON2_MEMORY_KIB", "must be 19456..1048576 KiB")
+	}
+	boundUint32(errs, "ARGON2_TIME", cfg.Auth.ArgonTime, 2, 16)
+	if cfg.Auth.ArgonParallelism < 1 || cfg.Auth.ArgonParallelism > 8 {
+		errs.add("ARGON2_PARALLELISM", "must be 1..8")
+	}
+	boundUint32(errs, "ARGON2_SALT_LEN", cfg.Auth.ArgonSaltLen, 8, 64)
+	boundUint32(errs, "ARGON2_KEY_LEN", cfg.Auth.ArgonKeyLen, 16, 64)
+	bound(errs, "AUTH_HASH_WORKERS", cfg.Auth.HashWorkers, 1, 8)
 
 	if cfg.Alloc.RetainedMonitorsOwner > cfg.Alloc.RetainedMonitorsGlobal {
 		errs.add("RETAINED_MONITORS_OWNER_LIMIT", "must be <= RETAINED_MONITORS_GLOBAL_LIMIT")
@@ -461,6 +510,32 @@ func envInt32(lookup func(string) (string, bool), errs *LoadError, key string, d
 	*dst = int32(v)
 }
 
+func envUint32(lookup func(string) (string, bool), errs *LoadError, key string, dst *uint32) {
+	raw, ok := lookup(key)
+	if !ok || raw == "" {
+		return
+	}
+	v, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		errs.add(key, "must be an unsigned 32-bit integer")
+		return
+	}
+	*dst = uint32(v)
+}
+
+func envUint8(lookup func(string) (string, bool), errs *LoadError, key string, dst *uint8) {
+	raw, ok := lookup(key)
+	if !ok || raw == "" {
+		return
+	}
+	v, err := strconv.ParseUint(raw, 10, 8)
+	if err != nil {
+		errs.add(key, "must be an unsigned 8-bit integer")
+		return
+	}
+	*dst = uint8(v)
+}
+
 func envInt64(lookup func(string) (string, bool), errs *LoadError, key string, dst *int64) {
 	raw, ok := lookup(key)
 	if !ok || raw == "" {
@@ -494,6 +569,12 @@ func positive(errs *LoadError, key string, v time.Duration) {
 }
 
 func bound(errs *LoadError, key string, v, lo, hi int) {
+	if v < lo || v > hi {
+		errs.add(key, "out of allowed range")
+	}
+}
+
+func boundUint32(errs *LoadError, key string, v uint32, lo, hi uint32) {
 	if v < lo || v > hi {
 		errs.add(key, "out of allowed range")
 	}
