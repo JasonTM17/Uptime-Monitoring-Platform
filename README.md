@@ -7,10 +7,12 @@ A personal Go backend engineering project planned around secure uptime checks, i
 ## Start here
 
 - [Product requirements and scope traceability](docs/product-requirements.md): Must/non-goal scope, R01–R24 to phase and gate mapping.
-- [Master implementation plan](plans/261021-1505-uptime-platform-master/plan.md): 11 phases and 93 focused learning commits.
-- [Documentation index](docs/README.md): database, API, security, UI/UX, verification and operations.
-- [Mentor workflow in Vietnamese](plans/261021-1505-uptime-platform-master/specs/12-learning-mentor-commits.md): one commit at a time, with exercises, review and knowledge checks.
-- [Current planning/execution ledger](plans/261021-1505-uptime-platform-master/reports/execution-ledger.md).
+- [Documentation index](docs/README.md): toolchain, runbooks, testing and operations docs.
+- [Toolchain pins](docs/toolchain.md) and the [local database runbook](docs/runbooks/local-database.md).
+
+A private, detailed implementation roadmap (11 phases, 93 focused commits)
+lives in this workspace's local planning directory and is intentionally not
+linked or published from public documentation.
 
 ## Planned product
 
