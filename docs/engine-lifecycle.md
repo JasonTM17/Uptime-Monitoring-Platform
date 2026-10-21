@@ -37,11 +37,22 @@ SelectDue (bounded, next_check_at <= now, no active run, not paused/deleted)
 | Crash after reservation commit, before attempt | Run reconciled to `INTERRUPTED` at takeover; schedule NOT rewound; no fabricated result/incident/outbox; next reservation continues the sequence â€” no catch-up replay. |
 | Result arrives after engine takeover | Epoch fence: run `STALE`, zero durable effect. |
 | Result arrives after pause/edit/delete/owner-disable | Generation/tombstone/owner fence: run `STALE`, monitor state and schedule untouched. |
+| Admin mutation while an incident is open (edit, pause, delete) | The mutation closes the incident in the same transaction with an honest reason (`CONFIG_CHANGED`/`DELETED`), never as observed recovery. Health stays whatever evidence last proved (e.g., DOWN): continued failures do not reopen an incident (no new transition), and a later recovery resolves silently — by design, an administrative change voids the old incident's evidence chain, so recovery notification after a config change would be noise. |
 | Queue full | Due monitors stay in the database; nothing is reserved, nothing is lost. Retained work is admitted when capacity returns, exactly once. |
 | Job waits in queue longer than its timeout | Attempt still gets its full configured budget â€” queue delay cannot produce a failure outcome, an incident, or an outbox intent. A genuinely slow target still produces an eligible `TIMEOUT`. |
 | Cancel before attempt | Zero network I/O, no observation; the reservation stays `RESERVED` and recoverable. |
 | Finalize fails or commit is ambiguous (conn dies mid-finalize) | Nothing partial persists. The coordinator makes one best-effort `STALE` mark â€” a no-op if the commit actually landed, otherwise it frees the monitor's one-active slot so a finalize defect can never wedge the monitor. The failure is recorded on `Engine.LastErr()`. |
 | Result replay | Unique `check_id` plus terminal disposition fence: duplicate changes nothing. |
+
+Known residual: if a finalize error AND its best-effort `STALE`
+mark both fail while the writer stays alive (e.g., a persistent
+external row-lock outliving `lock_timeout`), the run stays `RESERVED`
+for the rest of the epoch; the next owner's `ReconcileInterrupted`
+still reaps it. Liveness was chosen over a retry loop on the
+best-effort path. Similarly, an owner that fails to acquire within
+the bounded try-lock window leaves the process serving traffic with
+no engine — start-time overlap is an operations concern, not a state
+risk.
 
 ## Invariants
 

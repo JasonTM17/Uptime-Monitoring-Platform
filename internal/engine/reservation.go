@@ -88,19 +88,20 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 
 	// 3) monitor row --- recheck admissibility under lock.
 	var (
-		owner2    uuid.UUID
 		gen       int64
 		lastSeq   int64
-		nextDue   time.Time
 		intervalS int
 		paused    bool
 		deleted   *time.Time
+		dueNow    bool
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT user_id,generation,last_reserved_sequence,next_check_at,
-		       interval_seconds,is_paused,deleted_at
+		SELECT generation,last_reserved_sequence,
+		       interval_seconds,is_paused,deleted_at,
+		       next_check_at <= clock_timestamp()
 		FROM uptime.monitors WHERE id=$1 FOR UPDATE`, monitorID).
-		Scan(&owner2, &gen, &lastSeq, &nextDue, &intervalS, &paused, &deleted)
+		Scan(&gen, &lastSeq, &intervalS, &paused,
+			&deleted, &dueNow)
 	if err != nil {
 		return nil, fmt.Errorf("lock monitor: %w", err)
 	}
@@ -156,8 +157,10 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 
 	// 6) Due-ness recheck under lock --- a mutation or a rival reserve
 	//    committed in the SelectDue->reserve gap must not be honored
-	//    against the stale candidate projection.
-	if nextDue.After(time.Now()) {
+	//    against the stale candidate projection. Compared on the DB
+	//    clock (single clock authority with the charged slot/advance),
+	//    not the app clock.
+	if !dueNow {
 		return nil, ErrMonitorNotDue
 	}
 

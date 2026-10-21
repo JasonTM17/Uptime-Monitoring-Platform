@@ -162,6 +162,28 @@ func (s *Scheduler) SetReserver(f func(context.Context, DueMonitor) (*Reservatio
 	s.reserve = f
 }
 
+// markStale is the TrySubmit-false compensation: a committed
+// reservation that can never be attempted is terminalized STALE so
+// the monitor stays schedulable. Best-effort through the writer.
+func (s *Scheduler) markStale(runID uuid.UUID) {
+	if s.writer == nil {
+		return
+	}
+	_ = s.writer.Exec(context.Background(), func(ctx context.Context,
+		conn *pgx.Conn) error {
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		if _, err := MarkStaleRun(ctx, tx, runID, "STALE",
+			"queue_rejected"); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	})
+}
+
 // LastErr exposes the most recent denied reservation for tests and
 // operational diagnostics; nil when the last round had no denial.
 func (s *Scheduler) LastErr() error { return s.lastErr }
@@ -187,9 +209,17 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 		res, err := s.reserve(ctx, cand)
 		switch {
 		case errors.Is(err, ErrAdmissionFull):
+			s.lastErr = err            // global window saturated --- stop
 			s.lastOwner = cand.OwnerID // rotate past the denied owner
 			return admitted, nil
+		case errors.Is(err, ErrOwnerAdmissionFull):
+			s.lastErr = err // one owner's window --- skip, serve others
+			// Rotate past the saturated owner so the next tick does not
+			// re-probe it first while its rolling window is still full.
+			s.lastOwner = cand.OwnerID
+			continue
 		case err != nil:
+			s.lastErr = err
 			continue // not due / raced / inactive --- move to next candidate
 		}
 		job := Job{
@@ -205,8 +235,14 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 			},
 		}
 		if !s.pool.TrySubmit(job) {
-			// Unreachable given the capacity check; the committed
-			// reservation stays recoverable via reconciliation.
+			// Invariant: sole producer + capacity gate above makes a
+			// full queue unreachable; a closed pool means shutdown is
+			// already draining. Either way the committed reservation
+			// must not pin the monitor's one-active slot --- mark it
+			// STALE now rather than wait for the next takeover's
+			// reconciliation.
+			s.lastErr = ErrEngineStopped
+			s.markStale(res.RunID)
 			s.lastOwner = cand.OwnerID
 			return admitted, nil
 		}
