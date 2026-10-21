@@ -1,0 +1,7 @@
+# Stable defaults for future application files.
+* text=auto eol=lf
+
+# Imported source evidence and frozen review bundles retain their exact bytes.
+# Their SHA-256 manifests may include original CRLF input from Windows.
+plans/** -text
+.agentkit/config.yaml -text

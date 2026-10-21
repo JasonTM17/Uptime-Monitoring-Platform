@@ -1,0 +1,31 @@
+# Local AgentKit adapters remain installed in this workspace.
+.codex/
+.claude/
+.agents/
+.devin/
+.agentkit/*
+!.agentkit/config.yaml
+plans/templates/
+
+# Credentials, local environments, generated runtime evidence.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.dump
+*.sql.gz
+artifacts/
+coverage/
+*.coverprofile
+*.test
+*.exe
+bin/
+tmp/
+node_modules/
+web/dist/
+web/playwright-report/
+web/test-results/
+.DS_Store
+Thumbs.db
