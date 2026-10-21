@@ -2,7 +2,9 @@ package notification
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -36,34 +38,60 @@ func TestChannelValidation(t *testing.T) {
 	})
 }
 
+func testRing(t *testing.T, writeV int, keyBytes ...byte) *Keyring {
+	t.Helper()
+	spec := ""
+	for i, b := range keyBytes {
+		if i > 0 {
+			spec += ","
+		}
+		spec += fmt.Sprintf("%d=%s", i+1,
+			base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{b}, KeyLen)))
+	}
+	r, err := ParseKeyring(spec, fmt.Sprint(writeV))
+	if err != nil {
+		t.Fatalf("testRing: %v", err)
+	}
+	return r
+}
+
 func TestDestinationCrypto(t *testing.T) {
-	key := bytes.Repeat([]byte{7}, KeyLen)
+	ring := testRing(t, 1, 7)
+	aad := []byte("aad")
 
 	t.Run("encrypt/decrypt roundtrip", func(t *testing.T) {
-		ct, err := EncryptDestination(key, []byte("123456789"))
-		if err != nil {
+		ct, v, err := ring.EncryptDestination([]byte("123456789"), aad)
+		if err != nil || v != 1 {
 			t.Fatal(err)
 		}
 		if bytes.Contains(ct, []byte("123456789")) {
 			t.Fatal("ciphertext contains plaintext")
 		}
-		plain, err := DecryptDestination(key, ct)
+		plain, err := ring.DecryptDestination(v, ct, aad)
 		if err != nil || string(plain) != "123456789" {
 			t.Fatalf("roundtrip: %v %q", err, plain)
 		}
 	})
 
 	t.Run("wrong key fails closed", func(t *testing.T) {
-		ct, _ := EncryptDestination(key, []byte("999"))
-		other := bytes.Repeat([]byte{3}, KeyLen)
-		if _, err := DecryptDestination(other, ct); err == nil {
+		ct, v, _ := ring.EncryptDestination([]byte("999"), aad)
+		other := testRing(t, 1, 3)
+		if _, err := other.DecryptDestination(v, ct, aad); err == nil {
 			t.Fatal("wrong key decrypted")
 		}
 	})
 
-	t.Run("bad key length rejected", func(t *testing.T) {
-		if _, err := EncryptDestination([]byte("short"), []byte("x")); !errors.Is(err, ErrBadKey) {
-			t.Fatalf("want ErrBadKey, got %v", err)
+	t.Run("AAD tamper fails", func(t *testing.T) {
+		ct, v, _ := ring.EncryptDestination([]byte("999"), aad)
+		if _, err := ring.DecryptDestination(v, ct, []byte("other")); err == nil {
+			t.Fatal("wrong AAD decrypted")
+		}
+	})
+
+	t.Run("unknown version fails closed", func(t *testing.T) {
+		ct, _, _ := ring.EncryptDestination([]byte("999"), aad)
+		if _, err := ring.DecryptDestination(9, ct, aad); !errors.Is(err, ErrUnknownKey) {
+			t.Fatalf("want ErrUnknownKey, got %v", err)
 		}
 	})
 

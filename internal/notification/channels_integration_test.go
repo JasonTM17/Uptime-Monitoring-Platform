@@ -5,6 +5,7 @@ package notification_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -300,19 +301,30 @@ func (f *chanFixture) ownerID(t *testing.T, email string) uuid.UUID {
 // channel CLI wraps — straight against the repository.
 var testKey = bytes.Repeat([]byte{9}, notification.KeyLen)
 
+func testRing(t *testing.T) *notification.Keyring {
+	t.Helper()
+	r, err := notification.ParseKeyring(
+		"1="+base64.StdEncoding.EncodeToString(testKey), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func (f *chanFixture) verify(ownerID uuid.UUID, channelID, chatID, receipt string) {
 	f.t.Helper()
-	ct, err := notification.EncryptDestination(testKey, []byte(chatID))
+	cid, err := uuid.Parse(channelID)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	cid, err := uuid.Parse(channelID)
+	ct, _, err := testRing(f.t).EncryptDestination([]byte(chatID),
+		notification.DestinationAAD(cid, ownerID, 1))
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	if _, err := f.crepo.VerifyChannel(context.Background(), ownerID, cid,
 		ct, notification.MaskDestination(chatID),
-		notification.KeyVersion1, receipt); err != nil {
+		1, receipt); err != nil {
 		f.t.Fatalf("verify %s: %v", channelID, err)
 	}
 }

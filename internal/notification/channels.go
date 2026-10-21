@@ -62,6 +62,17 @@ type Channel struct {
 // right key version. It is never serialized into an API DTO.
 func (c Channel) Ciphertext() []byte { return c.destinationCiphertext }
 
+var ErrNotDeliverable = errors.New("channel is not a verified, enabled recipient")
+
+// Deliverable is the single gate every send path must pass: only a
+// VERIFIED, enabled, live channel carrying a sealed destination may
+// receive traffic. PENDING/DISABLED/tombstoned rows and verified
+// rows missing ciphertext all fail closed.
+func (c Channel) Deliverable() bool {
+	return c.Status == StatusVerified && c.Enabled &&
+		c.DeletedAt == nil && len(c.destinationCiphertext) > 0
+}
+
 // FieldError carries per-field failures for VALIDATION_ERROR.
 type FieldError struct {
 	Fields map[string]string

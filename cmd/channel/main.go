@@ -8,7 +8,7 @@
 //	channel verify -channel <uuid> -owner <uuid> -receipt <ref>
 //	  reads the destination (Telegram chat ID) from STDIN — it is
 //	  never accepted as a flag, never echoed, and only the mask is
-//	  printed back. CHANNEL_ENCRYPTION_KEY (64-hex / 32 bytes) and
+//	  printed back. Keys come from the versioned pair CHANNEL_READ_KEYRING + CHANNEL_WRITE_KEY_VERSION (legacy single CHANNEL_ENCRYPTION_KEY = implicit version 1) and
 //	  DATABASE_URL come from the environment.
 //
 //	channel decrypt-check -channel <uuid> -owner <uuid>
@@ -19,6 +19,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -54,16 +55,29 @@ func run(args []string, stdin *os.File) error {
 	}
 }
 
-func encKey() ([]byte, error) {
+// encKeyring resolves the typed keyring (F08): prefer the versioned
+// pair CHANNEL_READ_KEYRING + CHANNEL_WRITE_KEY_VERSION; accept the
+// legacy single CHANNEL_ENCRYPTION_KEY as an implicit version-1
+// read+write entry so existing operator runbooks keep working.
+func encKeyring() (*notification.Keyring, error) {
+	read := strings.TrimSpace(os.Getenv("CHANNEL_READ_KEYRING"))
+	writeV := strings.TrimSpace(os.Getenv("CHANNEL_WRITE_KEY_VERSION"))
+	if read != "" || writeV != "" {
+		if read == "" || writeV == "" {
+			return nil, fmt.Errorf("CHANNEL_READ_KEYRING and CHANNEL_WRITE_KEY_VERSION must be set together")
+		}
+		return notification.ParseKeyring(read, writeV)
+	}
 	raw := strings.TrimSpace(os.Getenv("CHANNEL_ENCRYPTION_KEY"))
 	if raw == "" {
-		return nil, fmt.Errorf("CHANNEL_ENCRYPTION_KEY not set (32-byte hex required)")
+		return nil, fmt.Errorf("no channel keys configured (CHANNEL_READ_KEYRING+CHANNEL_WRITE_KEY_VERSION, or legacy CHANNEL_ENCRYPTION_KEY)")
 	}
 	key, err := hex.DecodeString(raw)
 	if err != nil || len(key) != notification.KeyLen {
 		return nil, notification.ErrBadKey
 	}
-	return key, nil
+	return notification.ParseKeyring(
+		"1="+base64.StdEncoding.EncodeToString(key), "1")
 }
 
 func openPool(ctx context.Context) (*pgxpool.Pool, error) {
@@ -94,7 +108,7 @@ func verify(args []string, stdin *os.File) error {
 	if err := notification.ValidateReceipt(*receipt); err != nil {
 		return err
 	}
-	key, err := encKey()
+	ring, err := encKeyring()
 	if err != nil {
 		return err
 	}
@@ -111,13 +125,14 @@ func verify(args []string, stdin *os.File) error {
 	if dest == "" || len(dest) > 256 || strings.ContainsAny(dest, " \t\r\n") {
 		return fmt.Errorf("destination must be a single token (1-256 chars)")
 	}
-	ct, err := notification.EncryptDestination(key, []byte(dest))
+	ct, _, err := ring.EncryptDestination([]byte(dest),
+		notification.DestinationAAD(cid, oid, ring.WriteVersion()))
 	if err != nil {
 		return err
 	}
 	mask := notification.MaskDestination(dest)
 	if *dry {
-		fmt.Printf("dry-run: mask=%s key_version=%d (no write)\n", mask, notification.KeyVersion1)
+		fmt.Printf("dry-run: mask=%s key_version=%d (no write)\n", mask, ring.WriteVersion())
 		return nil
 	}
 
@@ -129,7 +144,7 @@ func verify(args []string, stdin *os.File) error {
 	}
 	defer pool.Close()
 	repo := notification.NewRepository(pool, 10*time.Second)
-	c, err := repo.VerifyChannel(ctx, oid, cid, ct, mask, notification.KeyVersion1, *receipt)
+	c, err := repo.VerifyChannel(ctx, oid, cid, ct, mask, ring.WriteVersion(), *receipt)
 	if err != nil {
 		return err
 	}
@@ -154,7 +169,7 @@ func decryptCheck(args []string) error {
 	if err != nil {
 		return fmt.Errorf("-owner must be a UUID")
 	}
-	key, err := encKey()
+	ring, err := encKeyring()
 	if err != nil {
 		return err
 	}
@@ -170,7 +185,12 @@ func decryptCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	plain, err := notification.DecryptDestination(key, c.Ciphertext())
+	if c.EncryptionKeyVersion == nil {
+		return fmt.Errorf("channel has no stored key version")
+	}
+	plain, err := ring.DecryptDestination(*c.EncryptionKeyVersion,
+		c.Ciphertext(), notification.DestinationAAD(cid, oid,
+			*c.EncryptionKeyVersion))
 	if err != nil {
 		return fmt.Errorf("decrypt failed (wrong key version or corrupt row)")
 	}
