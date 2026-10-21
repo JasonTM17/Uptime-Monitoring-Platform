@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../lib/api/client";
 import { useSession } from "../auth/session";
 import {
@@ -88,6 +88,15 @@ export function ChannelsPage() {
           : "Couldn’t delete the channel.",
       ),
   });
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmDelete(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [confirmDelete]);
 
   return (
     <div className="space-y-4">
@@ -213,7 +222,6 @@ export function ChannelsPage() {
           aria-modal="true"
           aria-labelledby="del-channel-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onKeyDown={(e) => e.key === "Escape" && setConfirmDelete(null)}
         >
           <div className="w-full max-w-sm rounded-lg border border-border bg-container p-4">
             <h2 id="del-channel-title" className="text-base font-semibold text-fg">
