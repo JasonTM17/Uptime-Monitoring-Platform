@@ -24,7 +24,7 @@ func TestConcurrentRegistration(t *testing.T) {
 		ArgonMemoryKiB: 19 * 1024, ArgonTime: 2, ArgonParallelism: 1,
 		ArgonSaltLen: 16, ArgonKeyLen: 32, HashWorkers: 2,
 	})
-	svc := auth.NewService(repo, hasher, intCfg())
+	svc := auth.NewService(repo, hasher, intCfg(), 10)
 	ctx := context.Background()
 
 	const email = "race@concurrent.test"

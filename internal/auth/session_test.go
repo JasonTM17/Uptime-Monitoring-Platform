@@ -189,8 +189,8 @@ func TestSessionToken(t *testing.T) {
 func sessionSvc(t *testing.T) (*Service, *userSessionStore, User) {
 	t.Helper()
 	store := newUserSessionStore()
-	svc := NewService(store, &countingHasher{}, testCfg())
-	u, err := store.CreateUser(context.Background(), "s@x.co", "$h", "")
+	svc := NewService(store, &countingHasher{}, testCfg(), 10)
+	u, err := store.CreateUser(context.Background(), "s@x.co", "$h", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

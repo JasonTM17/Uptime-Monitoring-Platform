@@ -41,7 +41,7 @@ func (e *FieldError) Error() string { return "validation failed" }
 // UserStore is the persistence seam Register depends on. *Repository
 // satisfies it; tests substitute fakes.
 type UserStore interface {
-	CreateUser(ctx context.Context, email, passwordHash, displayName string) (User, error)
+	CreateUser(ctx context.Context, email, passwordHash, displayName string, monitorLimit int) (User, error)
 	FindUserByEmail(ctx context.Context, email string) (User, error)
 }
 
@@ -74,12 +74,17 @@ type Service struct {
 	ipLimiter   *attemptLimiter
 	acctLimiter *attemptLimiter
 	regLimiter  *attemptLimiter
+	monLimit    int
 	now         func() time.Time
 	dummyMu     sync.Mutex
 	dummy       string
 }
 
-func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Service {
+// NewService builds the identity facade. defaultMonitorLimit is the
+// per-user monitor quota stamped at registration — the users row is
+// the runtime authority (admins may adjust per user), config only
+// supplies the default.
+func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig, defaultMonitorLimit int) *Service {
 	return &Service{
 		store:  store,
 		hasher: hasher,
@@ -90,6 +95,7 @@ func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Serv
 		ipLimiter:   newAttemptLimiter(cfg.LoginIPAttemptsPerMin, time.Minute, cfg.LimiterMaxKeys),
 		acctLimiter: newAttemptLimiter(cfg.LoginAccountAttemptsPer15M, 15*time.Minute, cfg.LimiterMaxKeys),
 		regLimiter:  newAttemptLimiter(cfg.RegisterIPAttemptsPerMin, time.Minute, cfg.LimiterMaxKeys),
+		monLimit:    defaultMonitorLimit,
 		now:         time.Now,
 	}
 }
@@ -178,7 +184,8 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (PublicUser, e
 	if err != nil {
 		return PublicUser{}, err
 	}
-	u, err := s.store.CreateUser(ctx, NormalizeEmail(in.Email), hash, strings.TrimSpace(in.DisplayName))
+	u, err := s.store.CreateUser(ctx, NormalizeEmail(in.Email), hash,
+		strings.TrimSpace(in.DisplayName), s.monLimit)
 	if err != nil {
 		if errors.Is(err, ErrDuplicateEmail) {
 			return PublicUser{}, ErrEmailTaken

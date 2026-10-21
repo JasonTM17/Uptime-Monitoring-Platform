@@ -46,7 +46,7 @@ func run() error {
 	// mutation; cookie Secure follows the deployment profile.
 	repo := auth.NewRepository(pool, cfg.Database.QueryTimeout)
 	hasher := auth.NewHasher(cfg.Auth)
-	svc := auth.NewService(repo, hasher, cfg.Auth)
+	svc := auth.NewService(repo, hasher, cfg.Auth, cfg.Engine.OwnerMonitorLimit)
 	secure := cfg.Profile == config.ProfileHosted
 	if secure && len(cfg.HTTP.TrustedProxies) == 0 {
 		// With no trusted proxy, every login attempt lands in one

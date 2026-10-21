@@ -86,14 +86,17 @@ func scanUser(row pgx.Row) (User, error) {
 }
 
 // CreateUser inserts a canonical-email user and returns the stored row.
-// Callers supply the already-normalized email and computed password hash.
-func (r *Repository) CreateUser(ctx context.Context, email, passwordHash, displayName string) (User, error) {
+// Callers supply the already-normalized email, computed password hash,
+// and the configured per-user monitor quota — the column is the quota
+// authority from this point on (DB DEFAULT is only a migration-era
+// fallback, never the policy source).
+func (r *Repository) CreateUser(ctx context.Context, email, passwordHash, displayName string, monitorLimit int) (User, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 	u, err := scanUser(r.pool.QueryRow(ctx,
-		`INSERT INTO uptime.users (id,email,password_hash,display_name)
-		 VALUES ($1,$2,$3,$4) RETURNING `+userCols,
-		uuid.New(), email, passwordHash, displayName))
+		`INSERT INTO uptime.users (id,email,password_hash,display_name,monitor_limit)
+		 VALUES ($1,$2,$3,$4,$5) RETURNING `+userCols,
+		uuid.New(), email, passwordHash, displayName, monitorLimit))
 	if err != nil {
 		return User{}, mapErr(err)
 	}

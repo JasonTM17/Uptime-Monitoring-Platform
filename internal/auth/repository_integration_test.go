@@ -38,12 +38,17 @@ func TestIdentityRepository(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("create and find round-trip", func(t *testing.T) {
-		u, err := repo.CreateUser(ctx, "rt@example.com", "$argon2id$fixture", "rt")
+		u, err := repo.CreateUser(ctx, "rt@example.com", "$argon2id$fixture", "rt", 77)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		if u.Status != auth.UserStatusActive || u.SecurityVersion != 1 {
 			t.Fatalf("unexpected defaults %+v", u)
+		}
+		// 77 differs from the column DEFAULT 10 — proves the caller-stamped
+		// quota lands, not the schema fallback.
+		if u.MonitorLimit != 77 {
+			t.Fatalf("monitor_limit = %d, want stamped quota 77 (not DB default)", u.MonitorLimit)
 		}
 		byEmail, err := repo.FindUserByEmail(ctx, "rt@example.com")
 		if err != nil || byEmail.ID != u.ID {
@@ -56,10 +61,10 @@ func TestIdentityRepository(t *testing.T) {
 	})
 
 	t.Run("duplicate email maps to ErrDuplicateEmail not 500", func(t *testing.T) {
-		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", ""); err != nil {
+		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", "", 10); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", ""); !errors.Is(err, auth.ErrDuplicateEmail) {
+		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", "", 10); !errors.Is(err, auth.ErrDuplicateEmail) {
 			t.Fatalf("expected ErrDuplicateEmail, got %v", err)
 		}
 	})

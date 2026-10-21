@@ -43,7 +43,7 @@ func newFixture(t *testing.T) *fixture {
 	svc := auth.NewService(repo, auth.NewHasher(config.AuthConfig{
 		ArgonMemoryKiB: 19 * 1024, ArgonTime: 2, ArgonParallelism: 1,
 		ArgonSaltLen: 16, ArgonKeyLen: 32, HashWorkers: 2,
-	}), intCfg())
+	}), intCfg(), 10)
 	csrf := auth.NewCSRFManager([]byte("integration-csrf-key-32bytes!"),
 		15*time.Minute, false, nil) // origin list set below
 	f := &fixture{t: t, svc: svc, repo: repo, origin: "http://fixture.local"}

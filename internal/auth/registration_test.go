@@ -51,7 +51,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{byKey: map[string]User{}, byID: map[uuid.UUID]User{}}
 }
 
-func (f *fakeStore) CreateUser(_ context.Context, email, hash, display string) (User, error) {
+func (f *fakeStore) CreateUser(_ context.Context, email, hash, display string, monLimit int) (User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, dup := f.byKey[email]; dup {
@@ -59,7 +59,7 @@ func (f *fakeStore) CreateUser(_ context.Context, email, hash, display string) (
 	}
 	u := User{ID: uuid.New(), Email: email, PasswordHash: hash,
 		DisplayName: display, Status: UserStatusActive,
-		SecurityVersion: 1, CreatedAt: time.Now()}
+		MonitorLimit: monLimit, SecurityVersion: 1, CreatedAt: time.Now()}
 	f.byKey[email] = u
 	f.byID[u.ID] = u
 	return u, nil
@@ -158,7 +158,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("happy path returns safe DTO only", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(newUserSessionStore(), ch, testCfg())
+		svc := NewService(newUserSessionStore(), ch, testCfg(), 10)
 		u, err := svc.Register(ctx, RegisterInput{
 			Email: "  Person@Site.com ", Password: validPW})
 		if err != nil {
@@ -171,9 +171,25 @@ func TestRegister(t *testing.T) {
 		// guarantee; assert the serialized shape too via handler test.
 	})
 
+	t.Run("configured owner monitor limit stamped on row", func(t *testing.T) {
+		store := newFakeStore()
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg(), 42)
+		u, err := svc.Register(ctx, RegisterInput{Email: "cap@x.co", Password: validPW})
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+		row, err := store.findByID(u.ID)
+		if err != nil {
+			t.Fatalf("lookup: %v", err)
+		}
+		if row.MonitorLimit != 42 {
+			t.Fatalf("monitor_limit stamped %d, want configured default 42", row.MonitorLimit)
+		}
+	})
+
 	t.Run("canonical-case duplicate maps to ErrEmailTaken", func(t *testing.T) {
 		store := newFakeStore()
-		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg())
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: func() *fakeSessions { s := newFakeSessions(); s.findUser = store.findByID; return s }()}, &countingHasher{}, testCfg(), 10)
 		if _, err := svc.Register(ctx, RegisterInput{Email: "dupe@x.co", Password: validPW}); err != nil {
 			t.Fatalf("first register: %v", err)
 		}
@@ -188,7 +204,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("invalid input never reaches the KDF", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(newUserSessionStore(), ch, testCfg())
+		svc := NewService(newUserSessionStore(), ch, testCfg(), 10)
 		_, err := svc.Register(ctx, RegisterInput{Email: "bad", Password: "x"})
 		var fe *FieldError
 		if !errors.As(err, &fe) {
@@ -201,7 +217,7 @@ func TestRegister(t *testing.T) {
 }
 
 func TestRegisterHandler(t *testing.T) {
-	svc := NewService(newUserSessionStore(), &countingHasher{}, testCfg())
+	svc := NewService(newUserSessionStore(), &countingHasher{}, testCfg(), 10)
 	svc.regLimiter = newAttemptLimiter(1000, time.Minute, 100) // subtests share one RemoteAddr
 	mux := NewHandler(svc, HandlerConfig{MaxJSONBody: 32 << 10}).Mux()
 	// Bodies are marshaled from maps so no credential-shaped literal

@@ -15,7 +15,7 @@ import (
 func sessionClient(t *testing.T, email string) (*Service, *userSessionStore, *http.ServeMux, string) {
 	t.Helper()
 	store := newUserSessionStore()
-	svc := NewService(store, &countingHasher{}, testCfg())
+	svc := NewService(store, &countingHasher{}, testCfg(), 10)
 	if _, err := svc.Register(context.Background(), RegisterInput{
 		Email: email, Password: validPW}); err != nil {
 		t.Fatalf("seed: %v", err)

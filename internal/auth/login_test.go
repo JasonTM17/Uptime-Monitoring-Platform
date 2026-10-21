@@ -38,7 +38,7 @@ func registerUser(t *testing.T, svc *Service, email string) {
 func loginSvc(t *testing.T) (*Service, *userSessionStore) {
 	t.Helper()
 	store := newUserSessionStore()
-	svc := NewService(store, &countingHasher{}, testCfg())
+	svc := NewService(store, &countingHasher{}, testCfg(), 10)
 	return svc, store
 }
 
@@ -78,7 +78,7 @@ func TestLogin(t *testing.T) {
 	t.Run("unknown email takes the KDF path and fails generic", func(t *testing.T) {
 		ch := &countingHasher{}
 		store := newUserSessionStore()
-		svc := NewService(store, ch, testCfg())
+		svc := NewService(store, ch, testCfg(), 10)
 		_, _, err := svc.Login(ctx, LoginInput{Email: "ghost@x.co", Password: validPW}, "198.51.100.9")
 		if !errors.Is(err, ErrBadCredentials) {
 			t.Fatalf("expected ErrBadCredentials, got %v", err)
@@ -105,7 +105,7 @@ func TestLogin(t *testing.T) {
 		cfg.LoginAccountAttemptsPer15M = 3
 		cfg.LoginIPAttemptsPerMin = 50 // isolate the account bucket
 		store := newUserSessionStore()
-		svc := NewService(store, &countingHasher{}, cfg)
+		svc := NewService(store, &countingHasher{}, cfg, 10)
 		registerUser(t, svc, "lim@x.co")
 		var last error
 		for i := 0; i < 4; i++ {
@@ -177,7 +177,7 @@ func TestLogin(t *testing.T) {
 		// asymmetry is an account-existence oracle (Wukong D1/F1).
 		busy := &busyHasher{err: ErrHashBusy}
 		store := newUserSessionStore()
-		svc := NewService(store, busy, testCfg())
+		svc := NewService(store, busy, testCfg(), 10)
 		store.putUser(User{ID: uuid.New(), Email: "k@x.co",
 			PasswordHash: "$argon2id$placeholder", Status: UserStatusActive})
 		_, _, errK := svc.Login(ctx, LoginInput{Email: "k@x.co", Password: validPW}, ip)

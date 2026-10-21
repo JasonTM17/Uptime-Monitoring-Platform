@@ -18,10 +18,10 @@ import (
 // user-lock creation, lookup validation, revoke replay rejection.
 func TestSessionRepository(t *testing.T) {
 	repo := auth.NewRepository(testPool(t), 10*time.Second)
-	svc := auth.NewService(repo, nil, intCfg())
+	svc := auth.NewService(repo, nil, intCfg(), 10)
 	ctx := context.Background()
 
-	u, err := repo.CreateUser(ctx, "sess@example.com", "$argon2id$fixture", "sess")
+	u, err := repo.CreateUser(ctx, "sess@example.com", "$argon2id$fixture", "sess", 10)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSessionRepository(t *testing.T) {
 	})
 
 	t.Run("revoke vs lookup is race-safe", func(t *testing.T) {
-		u2, err := repo.CreateUser(ctx, "race2@example.com", "$h", "")
+		u2, err := repo.CreateUser(ctx, "race2@example.com", "$h", "", 10)
 		if err != nil {
 			t.Fatal(err)
 		}

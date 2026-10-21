@@ -17,10 +17,10 @@ import (
 // DB path: revoke -> replay rejected; revoke-current kills the caller.
 func TestRevokedSessionFlow(t *testing.T) {
 	repo := auth.NewRepository(testPool(t), 10*time.Second)
-	svc := auth.NewService(repo, nil, intCfg())
+	svc := auth.NewService(repo, nil, intCfg(), 10)
 	ctx := context.Background()
 
-	u, err := repo.CreateUser(ctx, "rev@example.com", "$argon2id$fixture", "")
+	u, err := repo.CreateUser(ctx, "rev@example.com", "$argon2id$fixture", "", 10)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -48,11 +48,11 @@ func TestRevokedSessionFlow(t *testing.T) {
 // persists.
 func TestOwnSessionRoutes(t *testing.T) {
 	repo := auth.NewRepository(testPool(t), 10*time.Second)
-	svc := auth.NewService(repo, nil, intCfg())
+	svc := auth.NewService(repo, nil, intCfg(), 10)
 	ctx := context.Background()
 
-	owner, _ := repo.CreateUser(ctx, "own2@example.com", "$h", "")
-	other, _ := repo.CreateUser(ctx, "oth2@example.com", "$h", "")
+	owner, _ := repo.CreateUser(ctx, "own2@example.com", "$h", "", 10)
+	other, _ := repo.CreateUser(ctx, "oth2@example.com", "$h", "", 10)
 	a, _ := svc.CreateSession(ctx, owner.ID, "a")
 	b, _ := svc.CreateSession(ctx, owner.ID, "b")
 	foreign, _ := svc.CreateSession(ctx, other.ID, "f")
