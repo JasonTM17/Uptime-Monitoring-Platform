@@ -28,6 +28,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Build identity — injected via -ldflags "-X main.version=...
+// -X main.revision=...". Defaults identify uninstrumented local
+// builds; the release image always stamps both.
+var (
+	version  = "dev"
+	revision = "unknown"
+)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "api: "+err.Error())
@@ -41,7 +49,8 @@ func run() error {
 		return err
 	}
 	log := logger.New()
-	log.Info("starting api", "config", cfg.Summary())
+	log.Info("starting api", "version", version,
+		"revision", revision, "config", cfg.Summary())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

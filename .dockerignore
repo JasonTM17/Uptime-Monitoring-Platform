@@ -1,0 +1,12 @@
+# Deny-by-default build context: the daemon receives ONLY what the
+# Dockerfile compiles. Anything not re-included below never leaves
+# the host — .env secrets, plans/, kit state, web/, docs/, and any
+# future top-level path are excluded at upload time, not merely
+# unCOPY'd. Guarded by scripts/check-build-context.mjs (F13).
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**

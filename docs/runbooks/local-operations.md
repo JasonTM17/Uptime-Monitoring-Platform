@@ -90,3 +90,59 @@ curl -s http://127.0.0.1:8080/metrics
 curl -s http://127.0.0.1:8080/health/ready
 curl -s -H "Authorization: Bearer $METRICS_TOKEN" http://127.0.0.1:8080/metrics
 ```
+
+## Release image (C78)
+
+`uptime-platform:local` — two-stage build: pinned `golang:1.27.3`
+compiles a static `linux/amd64` binary; the runtime is
+`gcr.io/distroless/static-debian12:nonroot` (uid 65532, CA roots, no
+shell, no package manager). Only `/usr/local/bin/uptime-api` ships —
+no `cmd/testapp`, no source, no secrets.
+
+### Context gate (runs BEFORE any builder upload)
+
+```sh
+node scripts/check-build-context.mjs --context . --dockerfile Dockerfile \
+  --verify-sentinels --output artifacts/build/context-manifest.json
+docker build --pull \
+  --build-arg VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo dev) \
+  --build-arg REVISION=$(git rev-parse --short HEAD) \
+  -t uptime-platform:local .
+```
+
+`.dockerignore` is deny-by-default: only `go.mod`, `go.sum`, `cmd/`,
+`internal/` reach the daemon. The gate resolves the same ignore
+rules, rejects when any blocked namespace (`plans/`, `.env*`,
+`.secrets/`, kit state, `node_modules`, `artifacts/`, keys/certs)
+survives filtering, plants inert sentinels to prove exclusion, and
+writes a hashed manifest (`artifacts/build/context-manifest.json`,
+gitignored) for the build receipt.
+
+### Runtime contract
+
+- `USER 65532:65532` (nonroot), `ENTRYPOINT` is the binary itself —
+  PID 1 receives SIGTERM directly, no signal-swallowing shell.
+- Compose `app` service adds `read_only: true`, `cap_drop: [ALL]`,
+  `no-new-privileges`, `tmpfs /tmp` (8m), `stop_grace_period: 20s`.
+- Base digests are pinned in the Dockerfile comments; verify before
+  bumping — a mutable tag is not a pin.
+- `linux/amd64` only. ARM requires separate evidence; do not widen
+  the platform matrix silently.
+
+### Verified smoke (C78 evidence)
+
+| Check | Evidence |
+| --- | --- |
+| context gate | PASS — 165 files / 1.1MiB, sentinels excluded, manifest written |
+| `docker build --pull` | PASS — modules verified, static binary built |
+| inspect | `User=65532:65532`, labels `version`/`revision`, ~24MiB |
+| fail-fast | no env → exit 1 with config error, no crash loop |
+| CA roots | `/etc/ssl/certs/ca-certificates.crt` present |
+| read-only rootfs | `read_only: true` — service starts and serves |
+| live/ready | both 200 on a migrated stack |
+| metrics scrape | full catalog live: `owner_alive 1`, outbox age ≤ refresh |
+| SIGTERM | `docker stop` → exit 0 in ~0.6s, within grace period |
+
+The previous compatible rollback image is whatever the earlier
+`uptime-platform:local` tag last pointed to; retag before rebuilds if
+rollback matters for a session.

@@ -76,6 +76,49 @@ services:
       MIGRATE_ALLOW_DESTRUCTIVE: "false"
     networks: [test]
 
+  app:
+    # Release image (C78): nonroot distroless, single API binary.
+    # Build context is pre-gated by scripts/check-build-context.mjs.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${APP_VERSION:-dev}
+        REVISION: ${APP_REVISION:-local}
+    image: uptime-platform:local
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: local
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      ENGINE_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Channel keyring only needed when NOTIFICATIONS_ENABLED=true.
+      CHANNEL_ENCRYPTION_KEY: ${CHANNEL_ENCRYPTION_KEY:-}
+      CHANNEL_READ_KEYRING: ${CHANNEL_READ_KEYRING:-}
+      CHANNEL_WRITE_KEY_VERSION: ${CHANNEL_WRITE_KEY_VERSION:-}
+      NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-false}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    # Runtime contract: read-only root (the process writes nothing to
+    # disk), no capabilities, no privilege escalation. Signals reach
+    # PID 1 directly — the bounded shutdown needs the raw SIGTERM.
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,uid=65532,gid=65532
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    restart: unless-stopped
+    networks: [local]
+
   go-test:
     image: golang:1.27.3
     profiles: ["test"]
