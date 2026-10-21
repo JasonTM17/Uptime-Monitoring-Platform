@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -82,6 +83,53 @@ func (f *fakeSessions) RevokeSession(_ context.Context, id uuid.UUID) error {
 		}
 	}
 	return ErrNotFound
+}
+func (f *fakeSessions) ListSessionsByUser(_ context.Context, userID uuid.UUID, limit, offset int) ([]Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Session
+	for _, s := range f.byHash {
+		if s.UserID == userID && s.RevokedAt == nil {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID.String() < out[j].ID.String()
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	if offset >= len(out) {
+		return nil, nil
+	}
+	out = out[offset:]
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+func (f *fakeSessions) RevokeSessionForUser(_ context.Context, userID, sessionID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, s := range f.byHash {
+		if s.ID == sessionID && s.UserID == userID {
+			if s.RevokedAt != nil {
+				return ErrNotFound
+			}
+			now := time.Now()
+			s.RevokedAt = &now
+			f.byHash[k] = s
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+func (f *fakeSessions) WithUserLock(_ context.Context, userID uuid.UUID, fn func(u User) error) error {
+	u, err := f.findUser(userID)
+	if err != nil {
+		return err
+	}
+	return fn(u)
 }
 func (f *fakeSessions) touches() int { f.mu.Lock(); defer f.mu.Unlock(); return f.touchN }
 

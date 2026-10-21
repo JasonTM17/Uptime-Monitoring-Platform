@@ -85,6 +85,9 @@ type SessionStore interface {
 	FindSessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, User, error)
 	TouchSession(ctx context.Context, id uuid.UUID, seenAt, idleExpiresAt time.Time) error
 	RevokeSession(ctx context.Context, id uuid.UUID) error
+	ListSessionsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Session, error)
+	RevokeSessionForUser(ctx context.Context, userID, sessionID uuid.UUID) error
+	WithUserLock(ctx context.Context, userID uuid.UUID, fn func(u User) error) error
 }
 
 // CreateSession issues a new session for userID. The repository call
@@ -116,32 +119,8 @@ func (s *Service) CreateSession(ctx context.Context, userID uuid.UUID, deviceLab
 // LookupSession validates a bearer token and returns the live session.
 // All rejection reasons collapse to ErrInvalidSession.
 func (s *Service) LookupSession(ctx context.Context, token string) (Session, error) {
-	hash, err := HashToken(token)
-	if err != nil {
-		return Session{}, err
-	}
-	sess, owner, err := s.store.FindSessionByTokenHash(ctx, hash)
-	if err != nil {
-		return Session{}, ErrInvalidSession
-	}
-	now := s.now()
-	if sess.RevokedAt != nil || owner.Status != UserStatusActive ||
-		sess.SecurityVersion != owner.SecurityVersion ||
-		!now.Before(sess.ExpiresAt) || !now.Before(sess.IdleExpiresAt) {
-		return Session{}, ErrInvalidSession
-	}
-	// Sliding idle + coalesced last_seen, single bounded UPDATE.
-	if now.Sub(sess.LastSeenAt) >= lastSeenCoalesce {
-		newIdle := now.Add(s.pol.Idle)
-		if newIdle.After(sess.ExpiresAt) {
-			newIdle = sess.ExpiresAt
-		}
-		if err := s.store.TouchSession(ctx, sess.ID, now, newIdle); err != nil {
-			return Session{}, err
-		}
-		sess.LastSeenAt, sess.IdleExpiresAt = now, newIdle
-	}
-	return sess, nil
+	sess, _, err := s.authenticateToken(ctx, token)
+	return sess, err
 }
 
 // RevokeSession stamps revoked_at server-side. Client-side cookie

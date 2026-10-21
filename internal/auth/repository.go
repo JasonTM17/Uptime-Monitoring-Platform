@@ -211,6 +211,73 @@ func (r *Repository) TouchSession(ctx context.Context, id uuid.UUID, seenAt, idl
 	return nil
 }
 
+// ListSessionsByUser returns a bounded, deterministically-ordered page
+// of a user's active sessions (revoked excluded).
+func (r *Repository) ListSessionsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Session, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+sessionCols+` FROM uptime.sessions
+		 WHERE user_id=$1 AND revoked_at IS NULL
+		 ORDER BY created_at,id LIMIT $2 OFFSET $3`, userID, limit, offset)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var s Session
+		if err := rows.Scan(&s.ID, &s.UserID, &s.SecurityVersion, &s.CreatedAt,
+			&s.LastSeenAt, &s.ExpiresAt, &s.IdleExpiresAt, &s.RecentAuthAt,
+			&s.RevokedAt, &s.DeviceLabel); err != nil {
+			return nil, mapErr(err)
+		}
+		out = append(out, s)
+	}
+	return out, mapErr(rows.Err())
+}
+
+// RevokeSessionForUser revokes only when the session belongs to userID —
+// foreign IDs are indistinguishable from missing ones (404, not 403).
+func (r *Repository) RevokeSessionForUser(ctx context.Context, userID, sessionID uuid.UUID) error {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE uptime.sessions SET revoked_at=now()
+		 WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`, sessionID, userID)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// WithUserLock runs fn inside a transaction while holding the user row
+// FOR UPDATE. Privileged mutations re-read the actor under this lock —
+// a middleware-captured principal is only an authentication snapshot,
+// never proof of current privileges.
+func (r *Repository) WithUserLock(ctx context.Context, userID uuid.UUID,
+	fn func(u User) error) error {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return mapErr(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	u, err := scanUser(tx.QueryRow(ctx,
+		`SELECT `+userCols+` FROM uptime.users WHERE id=$1 FOR UPDATE`, userID))
+	if err != nil {
+		return mapErr(err)
+	}
+	if err := fn(u); err != nil {
+		return err
+	}
+	return mapErr(tx.Commit(ctx))
+}
+
 // RevokeSession stamps revoked_at once (idempotent for callers: a
 // missing or already-revoked row is still a successful no-op only when
 // the row exists).
