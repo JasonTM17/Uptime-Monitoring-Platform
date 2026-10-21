@@ -1,31 +1,115 @@
-# Local AgentKit adapters remain installed in this workspace.
+# Private planning and internal working material: never publish.
+/plans/
+/private/
+/.private/
+/docs/private/
+/docs/internal/
+
+# Local AI adapters and session state; keep only the portable project config.
 .codex/
 .claude/
 .agents/
 .devin/
+.cursor/
+.gemini/
+.grok/
+.omp/
+.opencode/
+.dsh/
 .agentkit/*
 !.agentkit/config.yaml
-plans/templates/
 
-# Credentials, local environments, generated runtime evidence.
+# Secrets and local environments. Examples remain versionable.
 .env
 .env.*
 !.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+.secrets/
+secrets/
+.credentials/
+.pgpass
+.pg_service.conf
+.netrc
+.npmrc.local
+.docker/config.json
 *.pem
 *.key
 *.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local databases, backups, mounts and Docker overrides. Keep SQL migrations.
+pgdata/
+postgres-data/
+docker-data/
+.docker-data/
+data/local/
+backups/
 *.dump
+*.backup
 *.sql.gz
-artifacts/
-coverage/
-*.coverprofile
-*.test
-*.exe
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.db-wal
+*.db-shm
+compose.override.yml
+compose.override.yaml
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Go binaries, temporary builds and local coverage. Keep go.mod and go.sum.
 bin/
 tmp/
+.tmp/
+*.coverprofile
+coverage.out
+*.test
+*.exe
+*.prof
+
+# Frontend dependencies and generated assets. Keep package manager lockfiles.
 node_modules/
-web/dist/
-web/playwright-report/
-web/test-results/
+dist/
+build/
+.vite/
+.next/
+.turbo/
+.parcel-cache/
+.eslintcache
+*.tsbuildinfo
+*.local
+
+# Generated reports/media remain private until deliberately reviewed for release.
+artifacts/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.nyc_output/
+logs/
+*.log
+*.log.*
+
+# Local tools, virtual environments, editor state and OS debris.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.code-workspace
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+Desktop.ini
