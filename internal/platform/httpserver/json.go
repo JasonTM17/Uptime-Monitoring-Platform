@@ -10,25 +10,34 @@ import (
 	"net/http"
 )
 
-// ErrCode is the public, frozen error-code catalog. Clients may switch on
-// these strings; new codes are additive only.
+// ErrCode is the public, frozen error-code catalog from the API contract.
+// Clients may switch on these strings; new codes are additive only.
 type ErrCode string
 
 const (
-	ErrBadRequest    ErrCode = "BAD_REQUEST"
-	ErrNotFound      ErrCode = "NOT_FOUND"
-	ErrMethod        ErrCode = "METHOD_NOT_ALLOWED"
-	ErrPayloadLarge  ErrCode = "PAYLOAD_TOO_LARGE"
-	ErrUnsupported   ErrCode = "UNSUPPORTED_MEDIA_TYPE"
-	ErrUnprocessable ErrCode = "UNPROCESSABLE_ENTITY"
-	ErrInternal      ErrCode = "INTERNAL"
+	ErrBadRequest   ErrCode = "BAD_REQUEST"
+	ErrUnauth       ErrCode = "UNAUTHENTICATED"
+	ErrForbidden    ErrCode = "FORBIDDEN"
+	ErrCSRF         ErrCode = "CSRF_REJECTED"
+	ErrNotFound     ErrCode = "NOT_FOUND"
+	ErrMethod       ErrCode = "METHOD_NOT_ALLOWED"
+	ErrConflict     ErrCode = "CONFLICT"
+	ErrPayloadLarge ErrCode = "PAYLOAD_TOO_LARGE"
+	ErrUnsupported  ErrCode = "UNSUPPORTED_MEDIA_TYPE"
+	ErrValidation   ErrCode = "VALIDATION_ERROR"
+	ErrRateLimited  ErrCode = "RATE_LIMITED"
+	ErrReauth       ErrCode = "REAUTH_REQUIRED"
+	ErrInternal     ErrCode = "INTERNAL_ERROR"
+	ErrUnavailable  ErrCode = "UNAVAILABLE"
 )
 
-// APIError carries a safe client-facing failure.
+// APIError carries a safe client-facing failure. Fields holds bounded
+// per-field messages for VALIDATION_ERROR responses only.
 type APIError struct {
 	Status int
 	Code   ErrCode
 	Msg    string
+	Fields map[string]string
 }
 
 func (e *APIError) Error() string { return e.Msg }
@@ -43,10 +52,20 @@ func WriteJSON(w http.ResponseWriter, r *http.Request, status int, data any) {
 // WriteError renders the error envelope {"error":{code,message},"request_id":...}.
 // message must be safe for clients — never echo internals, SQL, or values.
 func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrCode, msg string) {
+	WriteErrorFields(w, r, status, code, msg, nil)
+}
+
+// WriteErrorFields renders the error envelope including a bounded
+// per-field breakdown (VALIDATION_ERROR contract).
+func WriteErrorFields(w http.ResponseWriter, r *http.Request, status int, code ErrCode, msg string, fields map[string]string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	errBody := map[string]any{"code": string(code), "message": msg}
+	if len(fields) > 0 {
+		errBody["fields"] = fields
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":      map[string]any{"code": string(code), "message": msg},
+		"error":      errBody,
 		"request_id": RequestIDFromContext(r.Context()),
 	})
 }
@@ -60,31 +79,31 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 	ct := r.Header.Get("Content-Type")
 	mt, _, mtErr := mime.ParseMediaType(ct)
 	if mtErr != nil || mt != "application/json" {
-		return &APIError{http.StatusUnsupportedMediaType, ErrUnsupported, "content type must be application/json"}
+		return &APIError{Status: http.StatusUnsupportedMediaType, Code: ErrUnsupported, Msg: "content type must be application/json"}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			return &APIError{http.StatusRequestEntityTooLarge, ErrPayloadLarge, "request body too large"}
+			return &APIError{Status: http.StatusRequestEntityTooLarge, Code: ErrPayloadLarge, Msg: "request body too large"}
 		}
-		return &APIError{http.StatusBadRequest, ErrBadRequest, "could not read request body"}
+		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "could not read request body"}
 	}
 	if len(body) == 0 {
-		return &APIError{http.StatusBadRequest, ErrBadRequest, "request body required"}
+		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "request body required"}
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return &APIError{http.StatusBadRequest, ErrBadRequest, "invalid JSON body"}
+		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "invalid JSON body"}
 	}
 	if dec.More() {
-		return &APIError{http.StatusBadRequest, ErrBadRequest, "request body must contain a single JSON value"}
+		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "request body must contain a single JSON value"}
 	}
 	if dup, ok := firstLevelDuplicate(body); ok {
-		return &APIError{http.StatusBadRequest, ErrBadRequest, fmt.Sprintf("duplicate key %q in body", dup)}
+		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: fmt.Sprintf("duplicate key %q in body", dup)}
 	}
 	return nil
 }

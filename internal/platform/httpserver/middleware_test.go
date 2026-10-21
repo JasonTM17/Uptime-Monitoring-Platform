@@ -83,7 +83,7 @@ func TestEnvelope(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	WriteError(rec, req, http.StatusUnprocessableEntity, ErrUnprocessable, "name is taken")
+	WriteErrorFields(rec, req, http.StatusUnprocessableEntity, ErrValidation, "invalid input", map[string]string{"name": "is taken"})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -92,7 +92,11 @@ func TestEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	errObj, ok := env["error"].(map[string]any)
-	if !ok || errObj["code"] != "UNPROCESSABLE_ENTITY" || errObj["message"] != "name is taken" {
+	if !ok || errObj["code"] != "VALIDATION_ERROR" || errObj["message"] != "invalid input" {
+		t.Fatalf("unexpected error body: %v", errObj)
+	}
+	fields, _ := errObj["fields"].(map[string]any)
+	if fields["name"] != "is taken" {
 		t.Fatalf("envelope = %v", env)
 	}
 	if _, present := env["request_id"]; !present {
