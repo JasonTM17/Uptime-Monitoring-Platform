@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/*
+ * Token map — docs/design/stitch/tokens.json is the source of truth;
+ * these are the same semantic names as Tailwind v4 @theme values.
+ * Dark is primary (data-theme="light" flips the palette).
+ */
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* dark palette (primary) */
+  --color-canvas: #031427;
+  --color-container: #102034;
+  --color-overlay: #1b2b3f;
+  --color-inset: #000f21;
+  --color-fg: #d3e4fe;
+  --color-fg-secondary: #bec8d2;
+  --color-fg-muted: #88929b;
+  --color-border: #1e293b;
+  --color-border-strong: #3e4850;
+  --color-border-subtle: #0b1c30;
+
+  --color-accent: #0ea5e9;
+  --color-accent-hover: #38bdf8;
+  --color-accent-fg: #00344d;
+  --color-accent-subtle: #0b2a3d;
+
+  --color-up-fg: #4edea3;
+  --color-up-bg: #0f2b21;
+  --color-up-border: #10b98133;
+  --color-up-dot: #10b981;
+
+  --color-down-fg: #ffb4ab;
+  --color-down-bg: #2d1215;
+  --color-down-border: #f43f5e66;
+  --color-down-strong: #fb7185;
+
+  --color-paused-fg: #94a3b8;
+  --color-paused-bg: #1b2430;
+  --color-paused-border: #64748b4d;
+
+  --color-stale-fg: #fbbf24;
+  --color-stale-bg: #2b2113;
+  --color-stale-border: #fbbf2440;
+
+  --color-absent-fg: #94a3b8;
+  --color-absent-bg: #1b2430;
+  --color-absent-border: #64748b4d;
+
+  --color-focus: #0ea5e9;
+  --color-denied-fg: #fbbf24;
+  --color-denied-bg: #2b2113;
+  --color-disabled-fg: #3e4850;
+  --color-disabled-bg: #102034;
+
+  /* chart palette */
+  --color-chart-ok: #4edea3;
+  --color-chart-degraded: #fbbf24;
+  --color-chart-outage: #fb7185;
+  --color-chart-nodata: #3e4850;
+  --color-chart-series: #38bdf8;
+  --color-chart-grid: #1e293b;
+}
+
+[data-theme="light"] {
+  --color-canvas: #f8fafc;
+  --color-container: #ffffff;
+  --color-overlay: #f1f5f9;
+  --color-inset: #f1f5f9;
+  --color-fg: #0f172a;
+  --color-fg-secondary: #334155;
+  --color-fg-muted: #64748b;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-border-subtle: #f1f5f9;
+
+  --color-accent: #0369a1;
+  --color-accent-hover: #075985;
+  --color-accent-fg: #ffffff;
+  --color-accent-subtle: #e0f2fe;
+  --color-focus: #0369a1;
+
+  --color-up-fg: #047857;
+  --color-up-bg: #d1fae5;
+  --color-up-border: #a7f3d0;
+  --color-up-dot: #047857;
+  --color-down-fg: #be123c;
+  --color-down-bg: #ffe4e6;
+  --color-down-border: #fda4af;
+  --color-down-strong: #be123c;
+  --color-paused-fg: #64748b;
+  --color-paused-bg: #f1f5f9;
+  --color-paused-border: #cbd5e1;
+  --color-stale-fg: #b45309;
+  --color-stale-bg: #fef3c7;
+  --color-stale-border: #fcd34d;
+  --color-absent-fg: #64748b;
+  --color-absent-bg: #f1f5f9;
+  --color-absent-border: #cbd5e1;
+  --color-denied-fg: #b45309;
+  --color-denied-bg: #fef3c7;
+  --color-disabled-fg: #94a3b8;
+  --color-disabled-bg: #f1f5f9;
+
+  --color-chart-ok: #047857;
+  --color-chart-degraded: #b45309;
+  --color-chart-outage: #be123c;
+  --color-chart-nodata: #cbd5e1;
+  --color-chart-series: #0369a1;
+  --color-chart-grid: #e2e8f0;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-canvas text-fg font-sans text-[13px] antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  /* reduced motion: spinners/pulses degrade to static states */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

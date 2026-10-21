@@ -73,6 +73,34 @@ jobs:
           PGPASS: postgres
           TEST_DATABASE_URL: postgres://uptime_test:${PGPASS}@localhost:5433/uptime_test?sslmode=disable
 
+  web-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install
+        run: npm --prefix web ci
+      - name: lint
+        run: npm --prefix web run lint
+      - name: typecheck
+        run: npm --prefix web run typecheck
+      - name: test
+        run: npm --prefix web run test
+      - name: build
+        run: npm --prefix web run build
+      - name: no secrets in bundle
+        run: >-
+          ! grep -riE "dev-test-pw|postgres://|bot.?token|session.?canary"
+          web/dist/
+      - name: e2e
+        run: >-
+          cd web && npx playwright install --with-deps chromium
+          && npx playwright test
+
   staged-secrets-self-test:
     runs-on: ubuntu-latest
     steps:
