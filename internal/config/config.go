@@ -29,14 +29,15 @@ const (
 
 // Config is the validated, immutable process configuration.
 type Config struct {
-	Profile   Profile
-	HTTP      HTTPConfig
-	Database  DatabaseConfig
-	Engine    EngineConfig
-	Admission AdmissionConfig
-	Alloc     AllocConfig
-	Notify    NotifyConfig
-	Auth      AuthConfig
+	Profile       Profile
+	HTTP          HTTPConfig
+	Database      DatabaseConfig
+	Engine        EngineConfig
+	Admission     AdmissionConfig
+	Alloc         AllocConfig
+	Notify        NotifyConfig
+	Auth          AuthConfig
+	Observability ObservabilityConfig
 }
 
 // HTTPConfig bounds the public HTTP server.
@@ -143,6 +144,22 @@ type NotifyConfig struct {
 type Keyring interface {
 	Lookup(version string) ([]byte, bool)
 	WriteVersion() string
+}
+
+// ObservabilityConfig gates the bounded metrics surface. Local
+// profile defaults the endpoint on (loopback-bound dev server);
+// hosted profile requires an explicit opt-in AND a bearer token —
+// public metrics must never expose internals unauthenticated.
+type ObservabilityConfig struct {
+	MetricsEnabled bool
+	// MetricsToken, when set, requires Authorization: Bearer on
+	// /metrics. A secret: required for hosted, optional for local.
+	MetricsToken string
+	// GaugeRefresh bounds how often DB-backed gauges (outbox state
+	// counts) may refresh — scrape rate can never fan out past it.
+	GaugeRefresh time.Duration
+	// GaugeTimeout bounds each gauge probe.
+	GaugeTimeout time.Duration
 }
 
 // LoadError aggregates every detected problem, keyed by name only.
@@ -257,6 +274,20 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		cfg.Notify.KeyringWriteV = v
 	}
 
+	if raw, ok := lookup("METRICS_ENABLED"); ok {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			errs.add("METRICS_ENABLED", "must be a boolean")
+		} else {
+			cfg.Observability.MetricsEnabled = v
+		}
+	}
+	if v, ok := lookup("METRICS_TOKEN"); ok {
+		cfg.Observability.MetricsToken = v
+	}
+	envDuration(lookup, errs, "METRICS_GAUGE_REFRESH", &cfg.Observability.GaugeRefresh)
+	envDuration(lookup, errs, "METRICS_GAUGE_TIMEOUT", &cfg.Observability.GaugeTimeout)
+
 	cfg.Database.URL = requiredSecret(lookup, errs, "DATABASE_URL")
 	cfg.Database.EngineURL = requiredSecret(lookup, errs, "ENGINE_DATABASE_URL")
 	cfg.Database.MigrationURL = requiredSecret(lookup, errs, "MIGRATION_DATABASE_URL")
@@ -317,6 +348,11 @@ func localDefaults() Config {
 			RetainedChannelsGlobal: 100,
 		},
 		Auth: defaultAuthConfig(),
+		Observability: ObservabilityConfig{
+			MetricsEnabled: true,
+			GaugeRefresh:   15 * time.Second,
+			GaugeTimeout:   2 * time.Second,
+		},
 	}
 }
 
@@ -358,6 +394,11 @@ func hostedDefaults() Config {
 			RetainedChannelsGlobal: 20,
 		},
 		Auth: defaultAuthConfig(),
+		Observability: ObservabilityConfig{
+			MetricsEnabled: false,
+			GaugeRefresh:   15 * time.Second,
+			GaugeTimeout:   2 * time.Second,
+		},
 	}
 }
 
@@ -475,6 +516,19 @@ func validate(cfg *Config, errs *LoadError) {
 	// CSRF token TTL bounded; key optional (ephemeral when unset).
 	if cfg.Auth.CSRFTokenTTL < time.Minute || cfg.Auth.CSRFTokenTTL > 2*time.Hour {
 		errs.add("CSRF_TOKEN_TTL", "must be 1m..2h")
+	}
+	// Metrics: hosted profile fails closed — enabled requires a
+	// bearer token, so internals are never public-unauthenticated.
+	if cfg.Profile == ProfileHosted && cfg.Observability.MetricsEnabled &&
+		cfg.Observability.MetricsToken == "" {
+		errs.add("METRICS_TOKEN", "hosted profile requires a metrics bearer token when METRICS_ENABLED")
+	}
+	if cfg.Observability.GaugeRefresh < time.Second || cfg.Observability.GaugeRefresh > 5*time.Minute {
+		errs.add("METRICS_GAUGE_REFRESH", "must be 1s..5m")
+	}
+	if cfg.Observability.GaugeTimeout < 100*time.Millisecond ||
+		cfg.Observability.GaugeTimeout > cfg.Observability.GaugeRefresh {
+		errs.add("METRICS_GAUGE_TIMEOUT", "must be >=100ms and <= METRICS_GAUGE_REFRESH")
 	}
 	if n := len(cfg.Auth.CSRFSigningKey); n > 0 && n < 16 {
 		errs.add("CSRF_SIGNING_KEY", "must be >= 16 bytes when set")

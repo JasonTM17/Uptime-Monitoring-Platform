@@ -20,6 +20,7 @@ import (
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/engine"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/monitor"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/notification"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/observability"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/logger"
@@ -140,6 +141,11 @@ func run() error {
 			ColumnBound:   10000,
 		}, log)
 
+	// Bounded metrics: finite catalog. Counters are constructed before
+	// the engine so EngineParams can inject the collector; the gauge
+	// source is bound after (engine may legitimately be absent).
+	metrics := observability.NewMetrics(nil, nil)
+
 	// Engine: dedicated owner conn + assembled lifecycle. A start
 	// failure is NOT fatal — another instance may legitimately hold
 	// the advisory lock, and the API still serves. When an engine
@@ -161,12 +167,45 @@ func run() error {
 			},
 			HeartbeatEvery:  5 * time.Second,
 			FinalizeTimeout: cfg.Database.QueryTimeout,
+			Metrics:         metrics,
 		}, checker.NewChecker(checker.SystemResolver{})); err != nil {
 		log.Error("engine start failed; checks will not run", "err", err)
 		_ = engConn.Close(ctx)
 	} else {
 		eng = e
 	}
+
+	// Scrape-time gauges: atomic engine reads + a TTL-cached outbox
+	// state count (bounded DB cost regardless of scrape rate).
+	outboxSrc := observability.NewOutboxGauges(
+		func(ctx context.Context) ([len(observability.OutboxStates)]int64, error) {
+			var counts [len(observability.OutboxStates)]int64
+			rows, err := pool.Query(ctx,
+				`SELECT state, count(*) FROM uptime.notification_outbox GROUP BY state`)
+			if err != nil {
+				return counts, err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var state string
+				var n int64
+				if err := rows.Scan(&state, &n); err != nil {
+					return counts, err
+				}
+				for i, s := range observability.OutboxStates {
+					if state == s {
+						counts[i] = n
+						break
+					}
+				}
+			}
+			return counts, rows.Err()
+		}, cfg.Observability.GaugeRefresh, cfg.Observability.GaugeTimeout)
+	var gaugeFn func() engine.EngineGauges
+	if eng != nil {
+		gaugeFn = eng.Gauges
+	}
+	metrics.BindSources(gaugeFn, outboxSrc)
 	// Maintenance loops (Phase 06): rollup + retention + lease
 	// reclaim are always-on duties — gating them behind the
 	// notification flag would silently void the retention contract
@@ -261,32 +300,28 @@ func run() error {
 		}
 	}
 
-	ready := func(ctx context.Context) error {
-		if err := database.Ping(pool)(ctx); err != nil {
-			return err
-		}
-		if eng != nil {
-			if err := eng.Ready(ctx); err != nil {
-				return err
-			}
-		}
-		// A dead maintenance or delivery loop is not "ready": each
-		// loop owns one conn, and pgx.Conn never reconnects — a ping
-		// failure means the loop died silently.
-		if janConn != nil {
-			if err := janConn.Ping(ctx); err != nil {
-				return fmt.Errorf("janitor conn: %w", err)
-			}
-		}
-		if dispConn != nil {
-			if err := dispConn.Ping(ctx); err != nil {
-				return fmt.Errorf("dispatcher conn: %w", err)
-			}
-		}
-		return nil
+	// Readiness composes named probes — a dead maintenance or
+	// delivery loop is not "ready": each loop owns one conn, and
+	// pgx.Conn never reconnects, so a ping failure means the loop
+	// died silently. Liveness stays probe-free by construction.
+	readyProbes := []observability.Probe{
+		{Name: "database", Check: database.Ping(pool)},
 	}
+	if eng != nil {
+		readyProbes = append(readyProbes,
+			observability.Probe{Name: "engine", Check: eng.Ready})
+	}
+	if janConn != nil {
+		readyProbes = append(readyProbes,
+			observability.Probe{Name: "janitor", Check: janConn.Ping})
+	}
+	if dispConn != nil {
+		readyProbes = append(readyProbes,
+			observability.Probe{Name: "dispatcher", Check: dispConn.Ping})
+	}
+	ready := observability.NewHealth(readyProbes...).Ready
 
-	srv := httpserver.New(cfg, log, ready,
+	mounts := []httpserver.Mount{
 		httpserver.Mount{Pattern: "/auth/", Handler: authHandler.Mux()},
 		// Both the bare collection and the subtree mount so POST
 		// /monitors never hits a ServeMux trailing-slash redirect.
@@ -301,7 +336,17 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors/{id}/incidents", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/monitors/{id}/stats", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/dashboard/", Handler: anaHandler.Mux()},
-		httpserver.Mount{Pattern: "/admin/", Handler: adminHandler.Mux()})
+		httpserver.Mount{Pattern: "/admin/", Handler: adminHandler.Mux()},
+	}
+	if cfg.Observability.MetricsEnabled {
+		h := metrics.Handler()
+		if cfg.Observability.MetricsToken != "" {
+			h = observability.RequireBearer(cfg.Observability.MetricsToken, h)
+		}
+		mounts = append(mounts,
+			httpserver.Mount{Pattern: "/metrics", Handler: h})
+	}
+	srv := httpserver.New(cfg, log, ready, mounts...)
 	err = srv.Run(ctx)
 	// HTTP drained first. Then the delivery loops stop accepting
 	// work — the dispatcher's own in-flight send finishes inside

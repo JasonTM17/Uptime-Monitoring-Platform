@@ -20,6 +20,7 @@ type EngineParams struct {
 	Caps            AdmissionCaps // rolling-60s admission budgets
 	HeartbeatEvery  time.Duration // owner-liveness write cadence
 	FinalizeTimeout time.Duration // per-result finalize bound
+	Metrics         Counters      // nil = uninstrumented
 }
 
 var ErrEngineStopped = errors.New("engine: not accepting work")
@@ -48,6 +49,7 @@ type Engine struct {
 	sched  *Scheduler
 
 	finalizeTimeout time.Duration
+	metrics         Counters
 	ready           atomic.Bool
 
 	tickCtx    context.Context
@@ -90,6 +92,7 @@ func StartEngine(ctx context.Context, conn *pgx.Conn, instance uuid.UUID,
 		owner:           owner,
 		writer:          NewWriter(owner, p.HeartbeatEvery),
 		finalizeTimeout: p.FinalizeTimeout,
+		metrics:         p.Metrics,
 		tickDone:        make(chan struct{}),
 		coordStop:       make(chan struct{}),
 		coordDone:       make(chan struct{}),
@@ -98,8 +101,11 @@ func StartEngine(ctx context.Context, conn *pgx.Conn, instance uuid.UUID,
 	e.workerCtx, e.cancelWorker = context.WithCancel(context.Background())
 
 	e.pool = NewWorkerPool(p.Workers, p.QueueSize, ch)
+	e.pool.SetCounters(p.Metrics)
 	e.pool.Start(e.workerCtx)
 	e.sched = NewScheduler(e.writer, e.pool, owner.Epoch(), p.Caps, p.BatchLimit)
+	e.sched.SetCounters(p.Metrics)
+	e.writer.SetCounters(p.Metrics)
 
 	e.ready.Store(true)
 	go e.runScheduler(p.TickEvery)
@@ -130,6 +136,27 @@ func (e *Engine) Ready(context.Context) error {
 
 // State exposes the immutable ownership snapshot for diagnostics.
 func (e *Engine) State() OwnerState { return e.writer.State() }
+
+// EngineGauges is the scrape-time read of engine internals: queue
+// occupancy, worker utilization, configured workers, and owner
+// liveness. All values are atomic reads --- collection never blocks
+// or queries the database.
+type EngineGauges struct {
+	QueueDepth  int64
+	WorkersBusy int64
+	Workers     int64
+	OwnerAlive  bool
+}
+
+// Gauges snapshots the engine's in-memory gauges.
+func (e *Engine) Gauges() EngineGauges {
+	return EngineGauges{
+		QueueDepth:  int64(e.pool.QueueDepth()),
+		WorkersBusy: e.pool.BusyWorkers(),
+		Workers:     int64(e.pool.WorkerCount()),
+		OwnerAlive:  e.writer.Alive(),
+	}
+}
 
 // LastErr reports the most recent finalize failure, or nil  -  the
 // diagnostic surface for errors the coordinator cannot return.
@@ -172,7 +199,7 @@ func (e *Engine) runCoordinator() {
 func (e *Engine) finalize(ctx context.Context, r Result) {
 	fctx, cancel := context.WithTimeout(ctx, e.finalizeTimeout)
 	defer cancel()
-	_, err := e.writer.FinalizeObservation(fctx, FinalizeInput{
+	outcome, ferr := e.writer.FinalizeObservation(fctx, FinalizeInput{
 		Identity: FinalizeIdentity{
 			RunID: r.Job.RunID, MonitorID: r.Job.MonitorID,
 			OwnerID: r.Job.OwnerID, SegmentID: r.Job.SegmentID,
@@ -181,10 +208,13 @@ func (e *Engine) finalize(ctx context.Context, r Result) {
 		},
 		Observation: r.Observation,
 	})
-	if err == nil {
+	if e.metrics != nil {
+		e.metrics.RecordFinalize(outcome, ferr == nil)
+	}
+	if ferr == nil {
 		return
 	}
-	e.lastErr.Store(err)
+	e.lastErr.Store(ferr)
 	// A failed finalize leaves the run RESERVED  -  and one active run
 	// pins the monitor forever. Best-effort STALE frees the slot; if
 	// the commit actually landed, the terminal-status guard is a

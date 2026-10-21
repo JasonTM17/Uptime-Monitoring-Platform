@@ -19,6 +19,8 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
   pipeline states, causal ordering, operator dead-letter controls.
 - [Runbook: retention](runbooks/retention.md): bounded purge lanes,
   rollup barrier, protected references, operator checks.
+- [Runbook: local operations](runbooks/local-operations.md): health
+  semantics, bounded metrics catalog, freshness interpretation.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
 - [Admin security race matrix](testing/admin-security.md): the

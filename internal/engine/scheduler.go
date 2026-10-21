@@ -117,7 +117,8 @@ type Scheduler struct {
 	batchLimit int
 	clock      Clock
 	lastOwner  uuid.UUID
-	lastErr    error // last denied reservation - diagnostic only
+	lastErr    error    // last denied reservation - diagnostic only
+	metrics    Counters // nil-tolerant instrumentation seam
 
 	// Seams for deterministic unit tests; production wires the real
 	// DB-backed implementations in NewScheduler.
@@ -162,6 +163,9 @@ func (s *Scheduler) SetReserver(f func(context.Context, DueMonitor) (*Reservatio
 	s.reserve = f
 }
 
+// SetCounters attaches the metrics seam. Nil disables instrumentation.
+func (s *Scheduler) SetCounters(c Counters) { s.metrics = c }
+
 // markStale is the TrySubmit-false compensation: a committed
 // reservation that can never be attempted is terminalized STALE so
 // the monitor stays schedulable. Best-effort through the writer.
@@ -204,16 +208,25 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 		// Capacity BEFORE reserving: the scheduler is the only
 		// producer, so a positive reading guarantees TrySubmit succeeds.
 		if s.pool.Capacity() <= 0 {
+			if s.metrics != nil {
+				s.metrics.RecordDenial(DenialQueueFull)
+			}
 			return admitted, nil
 		}
 		res, err := s.reserve(ctx, cand)
 		switch {
 		case errors.Is(err, ErrAdmissionFull):
-			s.lastErr = err            // global window saturated --- stop
+			s.lastErr = err // global window saturated --- stop
+			if s.metrics != nil {
+				s.metrics.RecordDenial(DenialGlobalWindow)
+			}
 			s.lastOwner = cand.OwnerID // rotate past the denied owner
 			return admitted, nil
 		case errors.Is(err, ErrOwnerAdmissionFull):
 			s.lastErr = err // one owner's window --- skip, serve others
+			if s.metrics != nil {
+				s.metrics.RecordDenial(DenialOwnerWindow)
+			}
 			// Rotate past the saturated owner so the next tick does not
 			// re-probe it first while its rolling window is still full.
 			s.lastOwner = cand.OwnerID
@@ -242,12 +255,18 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 			// STALE now rather than wait for the next takeover's
 			// reconciliation.
 			s.lastErr = ErrEngineStopped
+			if s.metrics != nil {
+				s.metrics.RecordDenial(DenialQueueFull)
+			}
 			s.markStale(res.RunID)
 			s.lastOwner = cand.OwnerID
 			return admitted, nil
 		}
 		s.lastOwner = cand.OwnerID
 		admitted++
+		if s.metrics != nil {
+			s.metrics.RecordAdmissions(1)
+		}
 	}
 	return admitted, nil
 }

@@ -29,6 +29,7 @@ type Writer struct {
 	alive   atomic.Bool
 	done    chan struct{}
 	stopped sync.Once
+	metrics Counters // nil-tolerant instrumentation seam
 }
 
 func NewWriter(owner *Owner, hbEvery time.Duration) *Writer {
@@ -49,6 +50,17 @@ func (w *Writer) State() OwnerState {
 // Alive reports whether the owner connection is still believed good.
 func (w *Writer) Alive() bool { return w.alive.Load() }
 
+// SetCounters attaches the metrics seam. Nil disables instrumentation.
+func (w *Writer) SetCounters(c Counters) { w.metrics = c }
+
+// markDead performs the one-way alive->dead transition and reports
+// the owner loss exactly once per writer lifetime.
+func (w *Writer) markDead() {
+	if w.alive.CompareAndSwap(true, false) && w.metrics != nil {
+		w.metrics.RecordOwnerLoss()
+	}
+}
+
 // Done closes when the writer stops.
 func (w *Writer) Done() <-chan struct{} { return w.done }
 
@@ -67,7 +79,7 @@ func (w *Writer) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			if err := w.Heartbeat(ctx); err != nil {
-				w.alive.Store(false)
+				w.markDead()
 				return
 			}
 		}
@@ -82,13 +94,13 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 	w.owner.mu.Lock()
 	defer w.owner.mu.Unlock()
 	if w.owner.conn == nil {
-		w.alive.Store(false)
+		w.markDead()
 		return ErrOwnerLost
 	}
 	_, err := w.owner.conn.Exec(ctx,
 		"UPDATE uptime.engine_control SET heartbeat_at=now() WHERE id=1")
 	if err != nil {
-		w.alive.Store(false)
+		w.markDead()
 		return ErrOwnerLost
 	}
 	return nil

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
@@ -50,6 +51,9 @@ type WorkerPool struct {
 	started sync.Once
 	mu      sync.RWMutex
 	closed  bool
+
+	busy    atomic.Int64 // in-flight check attempts (gauge)
+	metrics Counters     // nil-tolerant instrumentation seam
 }
 
 func NewWorkerPool(workers, queueSize int, ch Checker) *WorkerPool {
@@ -97,6 +101,18 @@ func (p *WorkerPool) TrySubmit(j Job) bool {
 // Capacity reports free queue slots. Only meaningful while the
 // coordinator is the sole producer (consumers can only free space).
 func (p *WorkerPool) Capacity() int { return cap(p.jobs) - len(p.jobs) }
+
+// QueueDepth reports jobs buffered but not yet picked up.
+func (p *WorkerPool) QueueDepth() int { return len(p.jobs) }
+
+// BusyWorkers reports in-flight check attempts.
+func (p *WorkerPool) BusyWorkers() int64 { return p.busy.Load() }
+
+// WorkerCount reports the configured worker set size.
+func (p *WorkerPool) WorkerCount() int { return p.workers }
+
+// SetCounters attaches the metrics seam. Nil disables instrumentation.
+func (p *WorkerPool) SetCounters(c Counters) { p.metrics = c }
 
 // Results exposes the bounded result stream for the finalizer.
 func (p *WorkerPool) Results() <-chan Result { return p.results }
@@ -146,7 +162,13 @@ func (p *WorkerPool) runWorker(ctx context.Context) {
 				continue
 			default:
 			}
-			res := Result{Job: job, Observation: p.execute(ctx, job)}
+			p.busy.Add(1)
+			obs := p.execute(ctx, job)
+			p.busy.Add(-1)
+			if p.metrics != nil {
+				p.metrics.RecordObservation(obs.Outcome)
+			}
+			res := Result{Job: job, Observation: obs}
 			select {
 			case p.results <- res:
 			case <-ctx.Done():
