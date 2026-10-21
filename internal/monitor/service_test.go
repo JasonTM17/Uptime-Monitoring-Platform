@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeStore struct {
@@ -63,7 +64,7 @@ func (f *fakeStore) UpdateMonitor(_ context.Context, ownerID, id uuid.UUID, gen 
 
 func (f *fakeStore) SetMonitorPaused(_ context.Context, ownerID, id uuid.UUID, gen int64, paused bool) (Monitor, error) {
 	m, ok := f.monitors[id]
-	if !ok || m.UserID != ownerID {
+	if !ok || m.UserID != ownerID || m.DeletedAt != nil {
 		return Monitor{}, ErrMonitorNotFound
 	}
 	m.IsPaused, m.Generation = paused, m.Generation+1
@@ -74,14 +75,32 @@ func (f *fakeStore) SetMonitorPaused(_ context.Context, ownerID, id uuid.UUID, g
 
 func (f *fakeStore) SoftDeleteMonitor(_ context.Context, ownerID, id uuid.UUID, gen int64) error {
 	m, ok := f.monitors[id]
-	if !ok || m.UserID != ownerID {
+	if !ok || m.UserID != ownerID || m.DeletedAt != nil {
 		return ErrMonitorNotFound
+	}
+	if m.Generation != gen {
+		return ErrGenerationConflict
 	}
 	now := time.Now()
 	m.DeletedAt = &now
 	f.monitors[id] = m
 	f.gotGen = gen
 	return nil
+}
+
+// TxStore seam for the fake: delegate to the in-memory ops — unit
+// tests exercise merge/validation logic, not real transactions.
+func (f *fakeStore) CreateMonitorTx(ctx context.Context, _ pgx.Tx, ownerID uuid.UUID, _ int, in WriteFields, caps Caps) (Monitor, error) {
+	return f.CreateMonitor(ctx, ownerID, in, caps)
+}
+func (f *fakeStore) UpdateMonitorTx(ctx context.Context, _ pgx.Tx, ownerID, id uuid.UUID, gen int64, in WriteFields) (Monitor, error) {
+	return f.UpdateMonitor(ctx, ownerID, id, gen, in)
+}
+func (f *fakeStore) SetMonitorPausedTx(ctx context.Context, _ pgx.Tx, ownerID, id uuid.UUID, gen int64, paused bool) (Monitor, error) {
+	return f.SetMonitorPaused(ctx, ownerID, id, gen, paused)
+}
+func (f *fakeStore) SoftDeleteMonitorTx(ctx context.Context, _ pgx.Tx, ownerID, id uuid.UUID, gen int64) error {
+	return f.SoftDeleteMonitor(ctx, ownerID, id, gen)
 }
 
 var validFields = WriteFields{
@@ -95,7 +114,7 @@ func TestServiceCreate(t *testing.T) {
 
 	t.Run("valid input reaches store with trimmed name and caps", func(t *testing.T) {
 		fs := newFakeStore()
-		svc := NewService(fs, Caps{RetainedOwner: 100, RetainedGlobal: 200})
+		svc := NewService(fs, fs, Caps{RetainedOwner: 100, RetainedGlobal: 200})
 		m, err := svc.Create(ctx, owner, CreateInput{
 			Name: "  api  ", TargetURL: "https://example.com/health",
 			IntervalSeconds: 60, TimeoutSeconds: 5})
@@ -112,7 +131,7 @@ func TestServiceCreate(t *testing.T) {
 
 	t.Run("invalid input never reaches store", func(t *testing.T) {
 		fs := newFakeStore()
-		svc := NewService(fs, Caps{RetainedOwner: 100, RetainedGlobal: 200})
+		svc := NewService(fs, fs, Caps{RetainedOwner: 100, RetainedGlobal: 200})
 		_, err := svc.Create(ctx, owner, CreateInput{
 			Name: "", TargetURL: "ftp://x", IntervalSeconds: 10, TimeoutSeconds: 60})
 		var feErr *FieldError
@@ -136,7 +155,7 @@ func TestServicePatch(t *testing.T) {
 
 	t.Run("absent fields keep stored values", func(t *testing.T) {
 		fs, m := seed()
-		svc := NewService(fs, Caps{})
+		svc := NewService(fs, fs, Caps{})
 		p := PatchInput{}
 		p.IntervalSeconds.Set, p.IntervalSeconds.V = true, 120
 		up, err := svc.Patch(ctx, owner, m.ID, 1, p)
@@ -154,7 +173,7 @@ func TestServicePatch(t *testing.T) {
 		wf := validFields
 		wf.ExpectedStatus = &es
 		m, _ := fs.CreateMonitor(ctx, owner, wf, Caps{})
-		svc := NewService(fs, Caps{})
+		svc := NewService(fs, fs, Caps{})
 		p := PatchInput{}
 		p.ExpectedStatus.Set, p.ExpectedStatus.Null = true, true
 		up, err := svc.Patch(ctx, owner, m.ID, 1, p)
@@ -168,7 +187,7 @@ func TestServicePatch(t *testing.T) {
 
 	t.Run("out-of-bounds patch rejected before store", func(t *testing.T) {
 		fs, m := seed()
-		svc := NewService(fs, Caps{})
+		svc := NewService(fs, fs, Caps{})
 		p := PatchInput{}
 		p.IntervalSeconds.Set, p.IntervalSeconds.V = true, 10
 		if _, err := svc.Patch(ctx, owner, m.ID, 1, p); err == nil {
@@ -184,7 +203,7 @@ func TestServicePatch(t *testing.T) {
 
 	t.Run("stale generation surfaces conflict", func(t *testing.T) {
 		fs, m := seed()
-		svc := NewService(fs, Caps{})
+		svc := NewService(fs, fs, Caps{})
 		p := PatchInput{}
 		p.Name.Set, p.Name.V = true, "renamed"
 		_, err := svc.Patch(ctx, owner, m.ID, 99, p)

@@ -54,21 +54,21 @@ func NewHandler(svc *Service, cfg HandlerConfig) *Handler {
 func (h *Handler) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /auth/csrf", h.csrfChallenge)
-	mux.HandleFunc("GET /auth/me", h.RequireSession(h.me))
-	mux.HandleFunc("GET /auth/sessions", h.RequireSession(h.ownSessions))
+	mux.HandleFunc("GET /auth/me", h.svc.RequireSession(h.me))
+	mux.HandleFunc("GET /auth/sessions", h.svc.RequireSession(h.ownSessions))
 	if h.csrf != nil {
 		mux.HandleFunc("POST /auth/register", h.csrf.RequireCSRF(h.register))
 		mux.HandleFunc("POST /auth/login", h.csrf.RequireCSRF(h.login))
 		mux.HandleFunc("POST /auth/logout", h.csrf.RequireCSRF(h.logout))
 		mux.HandleFunc("DELETE /auth/sessions/{id}",
-			h.csrf.RequireCSRF(h.RequireSession(h.revokeOwnSession)))
+			h.csrf.RequireCSRF(h.svc.RequireSession(h.revokeOwnSession)))
 	} else {
 		// csrf==nil is a tests-only wiring; production always supplies a
 		// manager (cmd/api constructs one unconditionally).
 		mux.HandleFunc("POST /auth/register", h.register)
 		mux.HandleFunc("POST /auth/login", h.login)
 		mux.HandleFunc("POST /auth/logout", h.logout)
-		mux.HandleFunc("DELETE /auth/sessions/{id}", h.RequireSession(h.revokeOwnSession))
+		mux.HandleFunc("DELETE /auth/sessions/{id}", h.svc.RequireSession(h.revokeOwnSession))
 	}
 	for _, p := range []struct{ path, allow string }{
 		{"/auth/csrf", http.MethodGet}, {"/auth/me", http.MethodGet},

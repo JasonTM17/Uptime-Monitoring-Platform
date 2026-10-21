@@ -28,6 +28,12 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	return p, ok
 }
 
+// ContextWithPrincipal injects a principal — the seam for tests and
+// trusted internal callers that already authenticated the actor.
+func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
 // authenticateToken is the shared lookup: hash -> row -> all rejection
 // reasons collapse to ErrInvalidSession.
 func (s *Service) authenticateToken(ctx context.Context, token string) (Session, User, error) {
@@ -119,8 +125,10 @@ func (s *Service) WithActorLock(ctx context.Context, p Principal,
 
 // RequireSession is the authentication middleware: reads the session
 // cookie, validates it server-side, and injects the principal.
-// Rejections are a uniform 401 — no signal about why.
-func (h *Handler) RequireSession(next http.HandlerFunc) http.HandlerFunc {
+// Rejections are a uniform 401 — no signal about why. It lives on the
+// Service so every resource mux (auth, monitors, channels) shares one
+// authentication path rather than each wrapping its own.
+func (s *Service) RequireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ck, err := r.Cookie(sessionCookieName)
 		if err != nil || ck.Value == "" {
@@ -128,7 +136,7 @@ func (h *Handler) RequireSession(next http.HandlerFunc) http.HandlerFunc {
 				httpserver.ErrUnauth, "authentication required")
 			return
 		}
-		sess, owner, err := h.svc.authenticateToken(r.Context(), ck.Value)
+		sess, owner, err := s.authenticateToken(r.Context(), ck.Value)
 		if err != nil {
 			httpserver.WriteError(w, r, http.StatusUnauthorized,
 				httpserver.ErrUnauth, "authentication required")

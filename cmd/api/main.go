@@ -58,6 +58,10 @@ func run() error {
 		log.Error("quota budget ensure failed; monitor create will refuse",
 			"err", err)
 	}
+	monSvc := monitor.NewService(monRepo, monRepo, monitor.Caps{
+		RetainedOwner:  cfg.Alloc.RetainedMonitorsOwner,
+		RetainedGlobal: cfg.Alloc.RetainedMonitorsGlobal,
+	})
 	secure := cfg.Profile == config.ProfileHosted
 	if secure && len(cfg.HTTP.TrustedProxies) == 0 {
 		// With no trusted proxy, every login attempt lands in one
@@ -75,8 +79,17 @@ func run() error {
 		CSRF:           csrfMgr,
 		Logger:         log,
 	})
+	monHandler := monitor.NewHandler(monSvc, svc, monitor.HandlerConfig{
+		MaxJSONBody: cfg.HTTP.MaxJSONBodyBytes,
+		CSRF:        csrfMgr,
+		Logger:      log,
+	})
 
 	srv := httpserver.New(cfg, log, database.Ping(pool),
-		httpserver.Mount{Pattern: "/auth/", Handler: authHandler.Mux()})
+		httpserver.Mount{Pattern: "/auth/", Handler: authHandler.Mux()},
+		// Both the bare collection and the subtree mount so POST
+		// /monitors never hits a ServeMux trailing-slash redirect.
+		httpserver.Mount{Pattern: "/monitors", Handler: monHandler.Mux()},
+		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()})
 	return srv.Run(ctx)
 }

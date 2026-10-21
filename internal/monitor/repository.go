@@ -194,62 +194,75 @@ func scanMonitor(row pgx.Row) (Monitor, error) {
 	return m, err
 }
 
-// CreateMonitor inserts under the full quota fence:
+// CreateMonitorTx is the quota-fenced insert body for a transaction
+// whose caller ALREADY holds the owner user row FOR UPDATE — the
+// composition root (auth.WithActorLock) supplies the tx so session
+// recheck, quota lock, and insert commit or roll back atomically.
+// monitorLimit comes from the locked user row.
 //
-//	users(owner) FOR UPDATE → quota_budgets FOR UPDATE →
-//	count live (deleted_at IS NULL, paused included) vs
-//	owner/global live caps AND retained (all rows incl. tombstones)
-//	vs caps → INSERT.
-//
-// Counts happen inside the locked transaction, so two concurrent
-// creates racing for the final slot serialize — exactly one commits.
-// next_check_at = DB now() taken after the locks: creation marks
-// eligibility only; the engine still admits via durable budget (F02).
+// Lock order inside: quota_budgets FOR UPDATE → count → INSERT. Counts
+// serialize under the budget lock, so racing creates for the final
+// slot admit exactly one. next_check_at = DB now() taken after locks:
+// creation marks eligibility only; durable admission still gates the
+// actual check (F02).
+func (r *Repository) CreateMonitorTx(ctx context.Context, tx pgx.Tx,
+	ownerID uuid.UUID, monitorLimit int, in WriteFields, caps Caps) (Monitor, error) {
+	var globalLive int
+	if err := tx.QueryRow(ctx,
+		`SELECT global_monitor_limit FROM uptime.quota_budgets
+		 WHERE id=1 FOR UPDATE`).Scan(&globalLive); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Monitor{}, ErrBudgetMissing
+		}
+		return Monitor{}, mapErr(err)
+	}
+	var ownerLive, globalLiveN, ownerRetained, globalRetained int
+	if err := tx.QueryRow(ctx,
+		`SELECT
+		   (SELECT count(*) FROM uptime.monitors
+		     WHERE user_id=$1 AND deleted_at IS NULL),
+		   (SELECT count(*) FROM uptime.monitors
+		     WHERE deleted_at IS NULL),
+		   (SELECT count(*) FROM uptime.monitors
+		     WHERE user_id=$1),
+		   (SELECT count(*) FROM uptime.monitors)`,
+		ownerID).Scan(&ownerLive, &globalLiveN, &ownerRetained, &globalRetained); err != nil {
+		return Monitor{}, mapErr(err)
+	}
+	switch {
+	case ownerRetained >= caps.RetainedOwner ||
+		globalRetained >= caps.RetainedGlobal:
+		return Monitor{}, ErrQuotaRetained
+	case ownerLive >= monitorLimit:
+		return Monitor{}, ErrQuotaOwner
+	case globalLiveN >= globalLive:
+		return Monitor{}, ErrQuotaGlobal
+	}
+	m, err := scanMonitor(tx.QueryRow(ctx,
+		`INSERT INTO uptime.monitors
+		   (id,user_id,name,target_url,method,interval_seconds,
+		    timeout_seconds,expected_status,next_check_at)
+		 VALUES ($1,$2,$3,$4,'GET',$5,$6,$7,now())
+		 RETURNING `+monitorCols,
+		uuid.New(), ownerID, in.Name, in.TargetURL,
+		in.IntervalSeconds, in.TimeoutSeconds, in.ExpectedStatus))
+	if err != nil {
+		return Monitor{}, mapErr(err)
+	}
+	return m, nil
+}
+
+// CreateMonitor is the self-contained variant for non-handler callers
+// (tests, CLI): it takes the owner lock itself and applies only the
+// user-status predicate — HTTP mutations should instead compose under
+// auth.WithActorLock so the session row is fenced in the same commit.
 func (r *Repository) CreateMonitor(ctx context.Context, ownerID uuid.UUID,
 	in WriteFields, caps Caps) (Monitor, error) {
 	var out Monitor
 	err := r.withActorLock(ctx, ownerID, func(tx pgx.Tx, a actorRow) error {
-		var globalLive int
-		if err := tx.QueryRow(ctx,
-			`SELECT global_monitor_limit FROM uptime.quota_budgets
-			 WHERE id=1 FOR UPDATE`).Scan(&globalLive); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrBudgetMissing
-			}
-			return mapErr(err)
-		}
-		var ownerLive, globalLiveN, ownerRetained, globalRetained int
-		if err := tx.QueryRow(ctx,
-			`SELECT
-			   (SELECT count(*) FROM uptime.monitors
-			     WHERE user_id=$1 AND deleted_at IS NULL),
-			   (SELECT count(*) FROM uptime.monitors
-			     WHERE deleted_at IS NULL),
-			   (SELECT count(*) FROM uptime.monitors
-			     WHERE user_id=$1),
-			   (SELECT count(*) FROM uptime.monitors)`,
-			ownerID).Scan(&ownerLive, &globalLiveN, &ownerRetained, &globalRetained); err != nil {
-			return mapErr(err)
-		}
-		switch {
-		case ownerRetained >= caps.RetainedOwner ||
-			globalRetained >= caps.RetainedGlobal:
-			return ErrQuotaRetained
-		case ownerLive >= a.MonitorLimit:
-			return ErrQuotaOwner
-		case globalLiveN >= globalLive:
-			return ErrQuotaGlobal
-		}
-		m, err := scanMonitor(tx.QueryRow(ctx,
-			`INSERT INTO uptime.monitors
-			   (id,user_id,name,target_url,method,interval_seconds,
-			    timeout_seconds,expected_status,next_check_at)
-			 VALUES ($1,$2,$3,$4,'GET',$5,$6,$7,now())
-			 RETURNING `+monitorCols,
-			uuid.New(), ownerID, in.Name, in.TargetURL,
-			in.IntervalSeconds, in.TimeoutSeconds, in.ExpectedStatus))
+		m, err := r.CreateMonitorTx(ctx, tx, ownerID, a.MonitorLimit, in, caps)
 		if err != nil {
-			return mapErr(err)
+			return err
 		}
 		out = m
 		return nil
@@ -324,40 +337,50 @@ func lockedMonitor(tx pgx.Tx, ctx context.Context, ownerID, id uuid.UUID) (Monit
 	return m, nil
 }
 
-// mutateMonitor is the shared generation fence for every lifecycle
-// mutation: users FOR UPDATE (via withActorLock) → monitor FOR UPDATE
-// → generation compare → fn applies the UPDATE → generation+1 lands
+// mutateMonitorTx is the shared generation fence for every lifecycle
+// mutation inside a caller-held user lock: monitor FOR UPDATE →
+// generation compare → fn applies the UPDATE → generation+1 lands
 // exactly once in the same statement. A stale expected generation
 // returns ErrGenerationConflict with no partial effect.
+func (r *Repository) mutateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
+	expectedGen int64,
+	fn func(tx pgx.Tx, m Monitor) (Monitor, error)) (Monitor, error) {
+	m, err := lockedMonitor(tx, ctx, ownerID, id)
+	if err != nil {
+		return Monitor{}, err
+	}
+	if m.Generation != expectedGen {
+		return Monitor{}, ErrGenerationConflict
+	}
+	return fn(tx, m)
+}
+
+// mutateMonitor is the self-contained variant taking the user lock
+// itself (status predicate only) — see CreateMonitor's note on why
+// HTTP mutations prefer the *Tx forms under auth.WithActorLock.
 func (r *Repository) mutateMonitor(ctx context.Context, ownerID, id uuid.UUID,
 	expectedGen int64,
 	fn func(tx pgx.Tx, m Monitor) (Monitor, error)) (Monitor, error) {
 	var out Monitor
 	err := r.withActorLock(ctx, ownerID, func(tx pgx.Tx, _ actorRow) error {
-		m, err := lockedMonitor(tx, ctx, ownerID, id)
+		m, err := r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen, fn)
 		if err != nil {
 			return err
 		}
-		if m.Generation != expectedGen {
-			return ErrGenerationConflict
-		}
-		m2, err := fn(tx, m)
-		if err != nil {
-			return err
-		}
-		out = m2
+		out = m
 		return nil
 	})
 	return out, err
 }
 
-// UpdateMonitor applies a concrete write-set under the generation
-// fence. The service merged+validated the fields; callers must never
-// mass-assign user_id, health, streaks, sequences, or next_check_at —
-// those columns are absent from the SET clause by construction.
-func (r *Repository) UpdateMonitor(ctx context.Context, ownerID, id uuid.UUID,
+// UpdateMonitorTx applies a concrete write-set under the generation
+// fence inside the caller's transaction. The service merged+validated
+// the fields; callers must never mass-assign user_id, health, streaks,
+// sequences, or next_check_at — those columns are absent from the SET
+// clause by construction.
+func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
 	expectedGen int64, in WriteFields) (Monitor, error) {
-	return r.mutateMonitor(ctx, ownerID, id, expectedGen,
+	return r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
 		func(tx pgx.Tx, m Monitor) (Monitor, error) {
 			return scanMonitor(tx.QueryRow(ctx,
 				`UPDATE uptime.monitors SET
@@ -371,14 +394,15 @@ func (r *Repository) UpdateMonitor(ctx context.Context, ownerID, id uuid.UUID,
 		})
 }
 
-// SetMonitorPaused flips the lifecycle flag under the fence. Pause
-// never fabricates DOWN and resume never fabricates UP or a sample —
-// health, streaks, and sequence fences pass through untouched. Resume
-// sets next_check_at=now(): eligibility only, the durable admission
-// budget still gates the actual check (no check-now privilege).
-func (r *Repository) SetMonitorPaused(ctx context.Context, ownerID, id uuid.UUID,
+// SetMonitorPausedTx flips the lifecycle flag under the fence inside
+// the caller's transaction. Pause never fabricates DOWN and resume
+// never fabricates UP or a sample — health, streaks, and sequence
+// fences pass through untouched. Resume sets next_check_at=now():
+// eligibility only, the durable admission budget still gates the
+// actual check (no check-now privilege).
+func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
 	expectedGen int64, paused bool) (Monitor, error) {
-	return r.mutateMonitor(ctx, ownerID, id, expectedGen,
+	return r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
 		func(tx pgx.Tx, m Monitor) (Monitor, error) {
 			var q string
 			if paused {
@@ -395,12 +419,13 @@ func (r *Repository) SetMonitorPaused(ctx context.Context, ownerID, id uuid.UUID
 		})
 }
 
-// SoftDeleteMonitor tombstones under the fence. The row stays
-// retained (counted toward retained caps, audit history preserved);
-// every subsequent read/mutation collapses to ErrMonitorNotFound.
-func (r *Repository) SoftDeleteMonitor(ctx context.Context, ownerID, id uuid.UUID,
+// SoftDeleteMonitorTx tombstones under the fence inside the caller's
+// transaction. The row stays retained (counted toward retained caps,
+// audit history preserved); every subsequent read/mutation collapses
+// to ErrMonitorNotFound.
+func (r *Repository) SoftDeleteMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
 	expectedGen int64) error {
-	_, err := r.mutateMonitor(ctx, ownerID, id, expectedGen,
+	_, err := r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
 		func(tx pgx.Tx, m Monitor) (Monitor, error) {
 			_, err := tx.Exec(ctx,
 				`UPDATE uptime.monitors SET deleted_at=now(),
@@ -412,4 +437,42 @@ func (r *Repository) SoftDeleteMonitor(ctx context.Context, ownerID, id uuid.UUI
 			return m, nil
 		})
 	return err
+}
+
+// UpdateMonitor/SetMonitorPaused/SoftDeleteMonitor are the
+// self-contained variants for non-handler callers (tests, CLI): each
+// takes the owner lock itself and applies the status predicate only.
+func (r *Repository) UpdateMonitor(ctx context.Context, ownerID, id uuid.UUID,
+	expectedGen int64, in WriteFields) (Monitor, error) {
+	var out Monitor
+	err := r.withActorLock(ctx, ownerID, func(tx pgx.Tx, _ actorRow) error {
+		m, err := r.UpdateMonitorTx(ctx, tx, ownerID, id, expectedGen, in)
+		if err != nil {
+			return err
+		}
+		out = m
+		return nil
+	})
+	return out, err
+}
+
+func (r *Repository) SetMonitorPaused(ctx context.Context, ownerID, id uuid.UUID,
+	expectedGen int64, paused bool) (Monitor, error) {
+	var out Monitor
+	err := r.withActorLock(ctx, ownerID, func(tx pgx.Tx, _ actorRow) error {
+		m, err := r.SetMonitorPausedTx(ctx, tx, ownerID, id, expectedGen, paused)
+		if err != nil {
+			return err
+		}
+		out = m
+		return nil
+	})
+	return out, err
+}
+
+func (r *Repository) SoftDeleteMonitor(ctx context.Context, ownerID, id uuid.UUID,
+	expectedGen int64) error {
+	return r.withActorLock(ctx, ownerID, func(tx pgx.Tx, _ actorRow) error {
+		return r.SoftDeleteMonitorTx(ctx, tx, ownerID, id, expectedGen)
+	})
 }

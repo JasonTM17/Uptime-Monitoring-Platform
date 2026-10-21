@@ -22,6 +22,8 @@ const (
 	ErrNotFound     ErrCode = "NOT_FOUND"
 	ErrMethod       ErrCode = "METHOD_NOT_ALLOWED"
 	ErrConflict     ErrCode = "CONFLICT"
+	ErrQuota        ErrCode = "QUOTA_EXCEEDED"
+	ErrAllocation   ErrCode = "ALLOCATION_LIMIT_REACHED"
 	ErrPayloadLarge ErrCode = "PAYLOAD_TOO_LARGE"
 	ErrUnsupported  ErrCode = "UNSUPPORTED_MEDIA_TYPE"
 	ErrValidation   ErrCode = "VALIDATION_ERROR"
