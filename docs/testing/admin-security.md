@@ -80,3 +80,19 @@ the write is honestly first, never torn.
 - `TestPermRevokeOrdering`'s naive delete is the adversarial floor:
   any write path that bypasses the epoch bump still cannot land
   *between* the guarded read and the commit.
+
+### Residual seams (Wukong verdict, named not hidden)
+
+- `AuthorizeRead` locks the actor row FOR UPDATE — a long read can
+  delay that actor's revocation (liveness, not correctness).
+- `now` is app-clock while revocations stamp `clock_timestamp()` —
+  a request parked behind the anchor evaluates expiries at a stale
+  instant (fail-closed direction only).
+- The exported `WithPrivilegedTx`/`WithPrivilegedTxUsers` wrappers
+  let a future caller skip reauth/idempotency — recipe discipline is
+  convention, not enforcement.
+- `monitorOwner` pre-reads the monitor's owner outside the guarded
+  tx — safe only because `owner_id` is immutable today.
+- Reads assume `conn.Begin` = READ COMMITTED; a non-default server
+  isolation converts blocking into serialization failures — still
+  fail-closed, never torn.

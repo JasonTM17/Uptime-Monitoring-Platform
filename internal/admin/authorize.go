@@ -249,8 +249,10 @@ func withPrivilegedTxUsers(ctx context.Context, conn Beginner,
 // AuthorizeRead is the read-path guard: the actor's user row is
 // locked and the same session/epoch/permission predicates rechecked,
 // but the security anchor is NOT taken — reads must not serialize
-// against privileged writes. The fn result is committed unchanged
-// (a read fn that mutates is a bug, not a contract).
+// against privileged writes. The actor row is still FOR UPDATE, so
+// a long-lived read can delay THAT actor's revocation — a liveness
+// cost only, never a correctness hole. The fn result is committed
+// unchanged (a read fn that mutates is a bug, not a contract).
 func AuthorizeRead(ctx context.Context, conn Beginner,
 	actor ActorRef, permission string, now time.Time,
 	fn func(tx pgx.Tx, perms map[string]bool) error) error {
