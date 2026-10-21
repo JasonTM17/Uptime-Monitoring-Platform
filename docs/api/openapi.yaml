@@ -989,27 +989,170 @@ paths:
         '200': { description: Draft }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
-  /admin/users:
+  /admin/overview:
     get:
-      tags: [planned]
-      summary: (admin phase) User administration — RBAC required
-      x-future: true
-      operationId: plannedAdminUsers
+      tags: [admin]
+      summary: Platform pulse — counts + dependency freshness (platform:read)
+      operationId: adminOverview
       responses:
-        '200': { description: Draft }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '422':
-          description: Custom-role lacks permissions (missing_permissions fields)
+        '200':
+          description: >
+            users/monitors/sessions/incidents/outbox counts, engine
+            heartbeat freshness ("fresh"|"stale"|"absent"), db reachable.
+            No secrets — never raw metrics or provider data.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-              example:
-                error:
-                  code: VALIDATION_ERROR
-                  message: role missing required permissions
-                  fields: { missing_permissions: "users.read, quota.write" }
-                request_id: "req_01H…"
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable (not a healthy zero) }
+
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: Bounded user inventory — search/status/role + cursor (users:read)
+      operationId: listAdminUsers
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 120 },
+            description: Email substring }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, DISABLED] } }
+        - { name: role_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string },
+            description: Keyset cursor bound to the filter set }
+      responses:
+        '200':
+          description: >
+            { users[], next_cursor } — safe projection only (no password
+            hash, TOTP material, or session tokens; counts are precomputed).
+            Keyset on (created_at,id) DESC — equal timestamps never dup/skip.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '400': { description: Invalid/mismatched cursor or unknown filter value }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable }
+
+  /admin/users/{id}:
+    get:
+      tags: [admin]
+      summary: One account — fields + monitor/session counts (users:read)
+      operationId: getAdminUser
+      parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+      responses:
+        '200': { description: Safe account projection + counts }
+        '400': { description: Malformed id }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Dependency unavailable }
+
+  /admin/monitors:
+    get:
+      tags: [admin]
+      summary: Global monitor inventory — redacted (monitors:global:read)
+      operationId: listAdminMonitors
+      parameters:
+        - { name: owner_id, in: query, schema: { type: string, format: uuid } }
+        - { name: paused, in: query, schema: { type: string, enum: ['true','false'] } }
+        - { name: health, in: query, schema: { type: string, enum: [UP, DOWN, UNKNOWN] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: >
+            { monitors[], next_cursor } — target reduced to scheme+host;
+            path/query secrets never leave the store.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '400': { description: Invalid cursor or filter }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable }
+
+  /admin/operations:
+    get:
+      tags: [admin]
+      summary: Ops health — engine/queue/outbox/rollup freshness (operations:read)
+      operationId: adminOperations
+      responses:
+        '200':
+          description: >
+            engine epoch/owner/heartbeat freshness, reserved+running
+            runs, outbox state + oldest pending age, rollup last-bucket
+            freshness. Explicit "absent" when evidence is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable }
+
+  /admin/outbox:
+    get:
+      tags: [admin]
+      summary: Outbox inventory — lifecycle only (deliveries:read)
+      operationId: listAdminOutbox
+      parameters:
+        - { name: state, in: query, schema: { type: string,
+            enum: [PENDING, LEASED, SENT, DEAD, SUPPRESSED] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: >
+            { deliveries[], next_cursor } — state/attempts/version only;
+            payload and destination never leave the store.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '400': { description: Invalid cursor or filter }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable }
+
+  /admin/audit-events:
+    get:
+      tags: [admin]
+      summary: Audit inventory — bounded window + cursor (audit:read)
+      operationId: listAdminAuditEvents
+      parameters:
+        - { name: action, in: query, schema: { type: string, maxLength: 60 } }
+        - { name: actor, in: query, schema: { type: string, format: uuid } }
+        - { name: subject, in: query, schema: { type: string, maxLength: 80 } }
+        - { name: from, in: query, schema: { type: string, format: date-time },
+            description: Window lower bound — range capped at 90 days }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: >
+            { events[], next_cursor } — safe_diff is redacted at write;
+            the projection adds no new sensitive data.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '400': { description: Invalid cursor, filter, or >90d window }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '503': { description: Dependency unavailable }
+
+  /admin/audit-events/{id}:
+    get:
+      tags: [admin]
+      summary: One redacted audit record (audit:read)
+      operationId: getAdminAuditEvent
+      parameters: [ { $ref: '#/components/parameters/IdPath' } ]
+      responses:
+        '200': { description: Audit row with safe_diff }
+        '400': { description: Malformed id }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: Dependency unavailable }
 
   /admin/roles:
     get:
@@ -1239,7 +1382,7 @@ paths:
         '409': { description: Stale generation or suspended owner }
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
-  /admin/deliveries/{id}/retry:
+  /admin/outbox/{id}/retry:
     post:
       tags: [admin]
       summary: Re-arm one DEAD stream head (deliveries:retry) — 202 re-queued
@@ -1256,7 +1399,7 @@ paths:
         '409': { description: Not DEAD, stale version, or live predecessor }
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
-  /admin/deliveries/{id}/suppress:
+  /admin/outbox/{id}/suppress:
     post:
       tags: [admin]
       summary: Suppress a causal stream from its head (deliveries:suppress)

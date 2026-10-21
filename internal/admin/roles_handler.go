@@ -81,13 +81,13 @@ func (h *RolesHandler) Mux() *http.ServeMux {
 	mux.HandleFunc("PATCH /admin/users/{id}/quota", guard(h.setQuota))
 	mux.HandleFunc("POST /admin/monitors/{id}/pause", guard(h.pauseMonitor))
 	mux.HandleFunc("POST /admin/monitors/{id}/resume", guard(h.resumeMonitor))
-	mux.HandleFunc("POST /admin/deliveries/{id}/retry", guard(h.retryDelivery))
-	mux.HandleFunc("POST /admin/deliveries/{id}/suppress", guard(h.suppressDelivery))
+	mux.HandleFunc("POST /admin/outbox/{id}/retry", guard(h.retryDelivery))
+	mux.HandleFunc("POST /admin/outbox/{id}/suppress", guard(h.suppressDelivery))
 	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /admin/monitors/{id}/pause", h.methodNotAllowed("POST"))
 		mux.HandleFunc(m+" /admin/monitors/{id}/resume", h.methodNotAllowed("POST"))
-		mux.HandleFunc(m+" /admin/deliveries/{id}/retry", h.methodNotAllowed("POST"))
-		mux.HandleFunc(m+" /admin/deliveries/{id}/suppress", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/outbox/{id}/retry", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/outbox/{id}/suppress", h.methodNotAllowed("POST"))
 	}
 	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /admin/users/{id}/suspend", h.methodNotAllowed("POST"))
@@ -99,6 +99,7 @@ func (h *RolesHandler) Mux() *http.ServeMux {
 	for _, m := range []string{"GET", "POST", "PUT", "DELETE"} {
 		mux.HandleFunc(m+" /admin/users/{id}/quota", h.methodNotAllowed("PATCH"))
 	}
+	h.registerQueries(mux, session)
 	mux.HandleFunc("/admin/", h.notFound)
 	return mux
 }
@@ -399,6 +400,10 @@ func (h *RolesHandler) setQuota(w http.ResponseWriter, r *http.Request) {
 // permission/step-up → 403, version/idempotency/last-superadmin →
 // 409, bounded field failures → 422.
 func (h *RolesHandler) writeErr(w http.ResponseWriter, r *http.Request, err error) {
+	if status, code, msg := mapQueryErr(err); status != 0 {
+		httpserver.WriteError(w, r, status, code, msg)
+		return
+	}
 	var ve *ValidationError
 	switch {
 	case errors.As(err, &ve):
