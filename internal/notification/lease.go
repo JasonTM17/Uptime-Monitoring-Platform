@@ -19,9 +19,9 @@ import (
 // concurrent processing of the same row.
 
 var (
-	ErrClaimClosed  = errors.New("no causally-eligible due outbox rows")
-	ErrLeaseLost    = errors.New("lease token no longer owns the row")
-	ErrLeaseConfig  = errors.New("invalid lease configuration")
+	ErrClaimClosed = errors.New("no causally-eligible due outbox rows")
+	ErrLeaseLost   = errors.New("lease token no longer owns the row")
+	ErrLeaseConfig = errors.New("invalid lease configuration")
 )
 
 // LeaseConfig bounds every claim/reclaim pass. LeaseFor must exceed
@@ -53,6 +53,7 @@ type Claim struct {
 	LeaseToken     uuid.UUID
 	LeaseExpires   time.Time
 	Attempts       int
+	CreatedAt      time.Time
 	SafePayload    []byte
 }
 
@@ -76,7 +77,8 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 
 	rows, err := tx.Query(ctx, `
 		SELECT o.id,o.monitor_id,o.user_id,o.channel_id,o.incident_id,
-		       o.event_kind,o.channel_version,o.attempts,o.safe_payload
+		       o.event_kind,o.channel_version,o.attempts,o.created_at,
+		       o.safe_payload
 		FROM uptime.notification_outbox o
 		WHERE o.state='PENDING' AND o.next_attempt_at <= clock_timestamp()
 		  AND (o.predecessor_id IS NULL OR EXISTS (
@@ -94,7 +96,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 		var c Claim
 		if err := rows.Scan(&c.ID, &c.MonitorID, &c.UserID, &c.ChannelID,
 			&c.IncidentID, &c.EventKind, &c.ChannelVersion, &c.Attempts,
-			&c.SafePayload); err != nil {
+			&c.CreatedAt, &c.SafePayload); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -181,6 +183,42 @@ func RescheduleDelivery(ctx context.Context, conn *pgx.Conn,
 		return "", fmt.Errorf("reschedule: %w", err)
 	}
 	return Disposition(st), nil
+}
+
+// SuppressDelivery terminalizes a leased row SUPPRESSED  -  the
+// authorized skip for a recipient that failed the pre-send fence
+// (disabled, unverified, version-changed, owner inactive). It is an
+// honest disposition, never a mislabeled send: downstream RECOVERY
+// treats SUPPRESSED like SENT for causal ordering.
+func SuppressDelivery(ctx context.Context, conn *pgx.Conn,
+	id, token uuid.UUID, reason string) (bool, error) {
+	tag, err := conn.Exec(ctx, `
+		UPDATE uptime.notification_outbox
+		SET state='SUPPRESSED', lease_token=NULL, lease_expires_at=NULL,
+		    last_error_code=$3, version=version+1
+		WHERE id=$1 AND lease_token=$2 AND state='LEASED'`,
+		id, token, reason)
+	if err != nil {
+		return false, fmt.Errorf("suppress: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// DeadDelivery terminalizes a leased row DEAD  -  permanent failure or
+// exhausted retry budget. A DEAD predecessor blocks its RECOVERY;
+// operations must resolve the head explicitly.
+func DeadDelivery(ctx context.Context, conn *pgx.Conn,
+	id, token uuid.UUID, code string) (bool, error) {
+	tag, err := conn.Exec(ctx, `
+		UPDATE uptime.notification_outbox
+		SET state='DEAD', lease_token=NULL, lease_expires_at=NULL,
+		    last_error_code=$3, version=version+1
+		WHERE id=$1 AND lease_token=$2 AND state='LEASED'`,
+		id, token, code)
+	if err != nil {
+		return false, fmt.Errorf("dead: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // ReclaimExpired sweeps up to cfg.Batch LEASED rows whose lease
