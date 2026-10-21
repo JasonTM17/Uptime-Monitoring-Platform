@@ -98,11 +98,13 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 // for engine code paths (reservations, results, reconciliation) to
 // reach the database. Callers receive the lock-holding conn, never a
 // pooled borrow.
-func (w *Writer) Exec(fn func(ctx context.Context, conn *pgx.Conn) error) error {
+func (w *Writer) Exec(ctx context.Context, fn func(ctx context.Context, conn *pgx.Conn) error) error {
+	w.owner.mu.Lock()
+	defer w.owner.mu.Unlock()
 	if !w.alive.Load() || w.owner.conn == nil {
 		return ErrOwnerLost
 	}
-	return fn(context.Background(), w.owner.conn)
+	return fn(ctx, w.owner.conn)
 }
 
 // Stop terminates the writer and releases the owner.

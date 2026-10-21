@@ -69,6 +69,21 @@ func (p *WorkerPool) Submit(ctx context.Context, j Job) bool {
 	}
 }
 
+// TrySubmit enqueues without blocking; false means the queue was full
+// at call time. The scheduler uses this after checking Capacity.
+func (p *WorkerPool) TrySubmit(j Job) bool {
+	select {
+	case p.jobs <- j:
+		return true
+	default:
+		return false
+	}
+}
+
+// Capacity reports free queue slots. Only meaningful while the
+// coordinator is the sole producer (consumers can only free space).
+func (p *WorkerPool) Capacity() int { return cap(p.jobs) - len(p.jobs) }
+
 // Results exposes the bounded result stream for the finalizer.
 func (p *WorkerPool) Results() <-chan Result { return p.results }
 
