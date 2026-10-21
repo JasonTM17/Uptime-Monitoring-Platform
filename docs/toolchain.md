@@ -12,7 +12,7 @@ a compatibility claim.
 | Node.js | 24.22.0 | Present in official nodejs.org dist index (released 2026-10-14); `.node-version` pins it |
 | npm | 11.6.2+ | Ships with Node 24.x; local 11.6.2 observed |
 | PostgreSQL | 17.11 | Target from planning snapshot; container image probe pending Docker engine start — NOT_RUN |
-| golang-migrate | 4.20.1 | Target image tag for migration job; probe pending Docker engine — NOT_RUN |
+| golang-migrate | v4.20.1 | Docker Hub tag `migrate/migrate:v4.20.1` verified to exist (v-prefixed); engine probe — NOT_RUN |
 
 ## Local machine inventory (informational, not compatibility proof)
 
