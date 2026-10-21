@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
+	"github.com/jackc/pgx/v5"
 )
 
 // The principal placed in request context is an authentication
@@ -58,23 +59,46 @@ func (s *Service) authenticateToken(ctx context.Context, token string) (Session,
 	return sess, owner, nil
 }
 
+// actorPredicate is the single fencing rule: the user must still be
+// ACTIVE and the session's stamped security_version must still match.
+// Auth owns this predicate; callers compose their own locked writes
+// around it via WithActorLock.
+func actorPredicate(u User, p Principal) error {
+	if u.Status != UserStatusActive || u.SecurityVersion != p.Session.SecurityVersion {
+		return ErrInvalidSession
+	}
+	return nil
+}
+
 // RecheckActor re-reads the user under FOR UPDATE lock and verifies
 // the session's security_version and ACTIVE status still hold. Use
 // before every privileged commit — the context principal is stale the
 // moment it is captured.
 func (s *Service) RecheckActor(ctx context.Context, p Principal) (User, error) {
 	var out User
-	err := s.store.WithUserLock(ctx, p.User.ID, func(u User) error {
+	err := s.store.WithUserLock(ctx, p.User.ID, func(_ pgx.Tx, u User) error {
 		out = u
-		if u.Status != UserStatusActive || u.SecurityVersion != p.Session.SecurityVersion {
-			return ErrInvalidSession
-		}
-		return nil
+		return actorPredicate(u, p)
 	})
 	if err != nil {
 		return User{}, err
 	}
 	return out, nil
+}
+
+// WithActorLock runs fn under the user-row FOR UPDATE lock AFTER the
+// actor predicate passes, inside the SAME transaction. Callers
+// composing privileged mutations (Phase-03 quota → monitor insert)
+// write through tx so the recheck genuinely fences the commit — a
+// recheck-then-new-tx split would reopen the TOCTOU this closes.
+func (s *Service) WithActorLock(ctx context.Context, p Principal,
+	fn func(tx pgx.Tx, u User) error) error {
+	return s.store.WithUserLock(ctx, p.User.ID, func(tx pgx.Tx, u User) error {
+		if err := actorPredicate(u, p); err != nil {
+			return err
+		}
+		return fn(tx, u)
+	})
 }
 
 // RequireSession is the authentication middleware: reads the session

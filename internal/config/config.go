@@ -118,6 +118,7 @@ type AuthConfig struct {
 	// the limiter map itself cannot exhaust memory.
 	LoginIPAttemptsPerMin      int
 	LoginAccountAttemptsPer15M int
+	RegisterIPAttemptsPerMin   int
 	LimiterMaxKeys             int
 	// CSRF: signing key for the double-submit challenge. Optional env;
 	// an ephemeral random key is generated when unset (tokens die with
@@ -210,6 +211,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envDuration(lookup, errs, "SESSION_IDLE_EXPIRY", &cfg.Auth.SessionIdleExpiry)
 	envInt(lookup, errs, "LOGIN_IP_ATTEMPTS_PER_MIN", &cfg.Auth.LoginIPAttemptsPerMin)
 	envInt(lookup, errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", &cfg.Auth.LoginAccountAttemptsPer15M)
+	envInt(lookup, errs, "REGISTER_IP_ATTEMPTS_PER_MIN", &cfg.Auth.RegisterIPAttemptsPerMin)
 	envInt(lookup, errs, "AUTH_LIMITER_MAX_KEYS", &cfg.Auth.LimiterMaxKeys)
 	if raw, ok := lookup("CSRF_SIGNING_KEY"); ok && raw != "" {
 		cfg.Auth.CSRFSigningKey = []byte(raw)
@@ -363,6 +365,7 @@ func defaultAuthConfig() AuthConfig {
 		// Security contract candidates: 5/min/IP, 5/15min/account.
 		LoginIPAttemptsPerMin:      5,
 		LoginAccountAttemptsPer15M: 5,
+		RegisterIPAttemptsPerMin:   5,
 		LimiterMaxKeys:             10000,
 		CSRFTokenTTL:               15 * time.Minute,
 	}
@@ -450,6 +453,7 @@ func validate(cfg *Config, errs *LoadError) {
 		errs.add("SESSION_IDLE_EXPIRY", "must be > 0 and <= SESSION_ABSOLUTE_EXPIRY")
 	}
 	bound(errs, "LOGIN_IP_ATTEMPTS_PER_MIN", cfg.Auth.LoginIPAttemptsPerMin, 1, 1000)
+	bound(errs, "REGISTER_IP_ATTEMPTS_PER_MIN", cfg.Auth.RegisterIPAttemptsPerMin, 1, 1000)
 	bound(errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", cfg.Auth.LoginAccountAttemptsPer15M, 1, 1000)
 	bound(errs, "AUTH_LIMITER_MAX_KEYS", cfg.Auth.LimiterMaxKeys, 100, 1000000)
 	// CSRF token TTL bounded; key optional (ephemeral when unset).
@@ -467,8 +471,10 @@ func validate(cfg *Config, errs *LoadError) {
 	}
 	for _, o := range cfg.HTTP.TrustedOrigins {
 		u, perr := url.Parse(o)
+		// u.User != nil rejects userinfo (http://u@host) — browsers
+		// never send it in Origin, so it would be a dead config entry.
 		if perr != nil || (u.Scheme != "http" && u.Scheme != "https") ||
-			u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 			errs.add("TRUSTED_ORIGINS", "entries must be exact scheme://host[:port] origins")
 			break
 		}

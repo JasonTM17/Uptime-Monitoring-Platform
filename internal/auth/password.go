@@ -22,12 +22,16 @@ import (
 
 const (
 	maxPasswordBytes = 1024 // spec byte cap, applied before any KDF work
-	maxArgonMemKiB   = 1024 * 1024
+	maxArgonMemKiB   = 256 * 1024
 	maxArgonTime     = 16
 	maxArgonPar      = 8
 	maxSaltLen       = 64
 	maxKeyLen        = 64
 	minPHCFields     = 6
+	// hashQueue bounds callers WAITING for a worker slot. Without it,
+	// an unauthenticated KDF-amplifier (register spam) could park one
+	// goroutine per request unboundedly inside Acquire.
+	hashQueue = 2
 )
 
 var (
@@ -41,23 +45,39 @@ type argonParams struct {
 	saltLen, keyLen           uint32
 }
 
-// HashGate bounds concurrent KDF work — expensive hashing never exceeds
-// the configured worker count, so a burst cannot exhaust CPU/RAM.
-type HashGate chan struct{}
+var ErrHashBusy = errors.New("hash workers saturated")
 
-func NewHashGate(workers int) HashGate { return make(chan struct{}, workers) }
+// HashGate bounds concurrent KDF work two ways: `work` caps running
+// workers (CPU/RAM bound), `wait` caps callers queued for a slot so an
+// unauthenticated burst cannot park unbounded goroutines — overflow
+// fails fast with ErrHashBusy (handler maps to 429) instead of blocking.
+type HashGate struct {
+	work chan struct{}
+	wait chan struct{}
+}
 
-// Acquire blocks until a worker slot frees or ctx ends.
+func NewHashGate(workers, queue int) HashGate {
+	return HashGate{work: make(chan struct{}, workers), wait: make(chan struct{}, queue)}
+}
+
+// Acquire takes a queue slot (fail-fast when full) then blocks for a
+// worker slot or ctx end.
 func (g HashGate) Acquire(ctx context.Context) error {
 	select {
-	case g <- struct{}{}:
+	case g.wait <- struct{}{}:
+	default:
+		return ErrHashBusy
+	}
+	select {
+	case g.work <- struct{}{}:
 		return nil
 	case <-ctx.Done():
+		<-g.wait
 		return ctx.Err()
 	}
 }
 
-func (g HashGate) Release() { <-g }
+func (g HashGate) Release() { <-g.work; <-g.wait }
 
 // Hasher computes and verifies Argon2id PHC hashes under configured
 // policy. Params are immutable after construction.
@@ -73,7 +93,7 @@ func NewHasher(cfg config.AuthConfig) *Hasher {
 			parallelism: uint32(cfg.ArgonParallelism),
 			saltLen:     cfg.ArgonSaltLen, keyLen: cfg.ArgonKeyLen,
 		},
-		gate: NewHashGate(cfg.HashWorkers),
+		gate: NewHashGate(cfg.HashWorkers, hashQueue),
 	}
 }
 
@@ -142,16 +162,21 @@ func parsePHC(phc string) (argonParams, []byte, []byte, error) {
 		if err != nil {
 			return p, nil, nil, ErrMalformedHash
 		}
+		var bit int
 		switch k {
 		case "m":
-			p.memory, seen = uint32(n), seen|1
+			p.memory, bit = uint32(n), 1
 		case "t":
-			p.time, seen = uint32(n), seen|2
+			p.time, bit = uint32(n), 2
 		case "p":
-			p.parallelism, seen = uint32(n), seen|4
+			p.parallelism, bit = uint32(n), 4
 		default:
 			return p, nil, nil, ErrMalformedHash
 		}
+		if seen&bit != 0 { // duplicate param — reject, never last-wins
+			return p, nil, nil, ErrMalformedHash
+		}
+		seen |= bit
 	}
 	if seen != 7 {
 		return p, nil, nil, ErrMalformedHash

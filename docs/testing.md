@@ -59,9 +59,10 @@ claimable with a run receipt on a real commit SHA.** Live remote CI requires
 owner-authorized public-history preparation first; private planning material
 is excluded from cache/artifacts/logs by design.
 
-The `go-integration` job is enabled (postgres service + migrate step);
-`-race` coverage belongs to the Linux container job, not the Windows
-local gate.
+The `go-integration` job is enabled (postgres service + migrate step)
+and runs the suite under `-race`. The Linux `go-test` compose profile
+also runs `-race -tags=integration` — on the Windows host, run the
+integration tag explicitly as above.
 
 ## Test style
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // fakeSessions is an in-memory SessionStore honoring the same contract:
@@ -124,12 +125,12 @@ func (f *fakeSessions) RevokeSessionForUser(_ context.Context, userID, sessionID
 	}
 	return ErrNotFound
 }
-func (f *fakeSessions) WithUserLock(_ context.Context, userID uuid.UUID, fn func(u User) error) error {
+func (f *fakeSessions) WithUserLock(_ context.Context, userID uuid.UUID, fn func(tx pgx.Tx, u User) error) error {
 	u, err := f.findUser(userID)
 	if err != nil {
 		return err
 	}
-	return fn(u)
+	return fn(nil, u)
 }
 func (f *fakeSessions) touches() int { f.mu.Lock(); defer f.mu.Unlock(); return f.touchN }
 

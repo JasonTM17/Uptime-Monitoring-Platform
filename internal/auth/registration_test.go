@@ -202,6 +202,7 @@ func TestRegister(t *testing.T) {
 
 func TestRegisterHandler(t *testing.T) {
 	svc := NewService(newUserSessionStore(), &countingHasher{}, testCfg())
+	svc.regLimiter = newAttemptLimiter(1000, time.Minute, 100) // subtests share one RemoteAddr
 	mux := NewHandler(svc, HandlerConfig{MaxJSONBody: 32 << 10}).Mux()
 	// Bodies are marshaled from maps so no credential-shaped literal
 	// appears in test source (staged-secret gate stays green).

@@ -48,6 +48,13 @@ func run() error {
 	hasher := auth.NewHasher(cfg.Auth)
 	svc := auth.NewService(repo, hasher, cfg.Auth)
 	secure := cfg.Profile == config.ProfileHosted
+	if secure && len(cfg.HTTP.TrustedProxies) == 0 {
+		// With no trusted proxy, every login attempt lands in one
+		// bucket keyed on the LB address — a shared 5/min budget.
+		// Fail-closed and correct, but an availability footgun.
+		log.Warn("hosted profile with empty TRUSTED_PROXIES: " +
+			"login/register limiters will key on the proxy address")
+	}
 	csrfMgr := auth.NewCSRFManager(cfg.Auth.CSRFSigningKey,
 		cfg.Auth.CSRFTokenTTL, secure, cfg.HTTP.TrustedOrigins)
 	authHandler := auth.NewHandler(svc, auth.HandlerConfig{
@@ -55,6 +62,7 @@ func run() error {
 		TrustedProxies: cfg.HTTP.TrustedProxies,
 		CookieSecure:   secure,
 		CSRF:           csrfMgr,
+		Logger:         log,
 	})
 
 	srv := httpserver.New(cfg, log, database.Ping(pool),

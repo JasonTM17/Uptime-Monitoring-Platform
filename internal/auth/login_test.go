@@ -103,6 +103,61 @@ func TestLogin(t *testing.T) {
 		}
 	})
 
+	t.Run("account lockout still admits the owner (no pin-lock)", func(t *testing.T) {
+		cfg := testCfg()
+		cfg.LoginAccountAttemptsPer15M = 3
+		cfg.LoginIPAttemptsPerMin = 50
+		svc, _ := loginSvc(t)
+		svc.acctLimiter = newAttemptLimiter(3, 15*time.Minute, 100)
+		registerUser(t, svc, "victim@x.co")
+		// Attacker saturates the account bucket from their own IP.
+		var last error
+		for i := 0; i < 4; i++ {
+			_, _, last = svc.Login(ctx, LoginInput{Email: "victim@x.co", Password: wrongPW}, "10.66.66.1")
+		}
+		var rl *RateLimitedError
+		if !errors.As(last, &rl) {
+			t.Fatalf("expected lockout, got %v", last)
+		}
+		// The real user's correct credential must still pass — the
+		// attacker cannot pin-lock the account.
+		iss, _, err := svc.Login(ctx, LoginInput{Email: "victim@x.co", Password: validPW}, "10.77.77.1")
+		if err != nil || iss.Token == "" {
+			t.Fatalf("owner locked out by attacker: %v", err)
+		}
+		// Bucket reset on success: subsequent owner logins are free.
+		if _, _, err := svc.Login(ctx, LoginInput{Email: "victim@x.co", Password: validPW}, "10.77.77.1"); err != nil {
+			t.Fatalf("bucket not cleared on success: %v", err)
+		}
+	})
+
+	t.Run("oversized password is uniform bad credentials", func(t *testing.T) {
+		svc, _ := loginSvc(t)
+		registerUser(t, svc, "big@x.co")
+		big := strings.Repeat("x", maxPasswordBytes+1)
+		for _, em := range []string{"big@x.co", "nobody@x.co"} {
+			_, _, err := svc.Login(ctx, LoginInput{Email: em, Password: big}, ip)
+			if !errors.Is(err, ErrBadCredentials) {
+				t.Fatalf("%s: expected ErrBadCredentials, got %v", em, err)
+			}
+		}
+	})
+
+	t.Run("register IP budget throttles the KDF endpoint", func(t *testing.T) {
+		cfg := testCfg()
+		cfg.RegisterIPAttemptsPerMin = 2
+		svc, _ := loginSvc(t)
+		svc.regLimiter = newAttemptLimiter(2, time.Minute, 100)
+		var last error
+		for i := 0; i < 3; i++ {
+			last = svc.CheckRegisterBudget("10.5.5.5")
+		}
+		var rl *RateLimitedError
+		if !errors.As(last, &rl) {
+			t.Fatalf("expected RateLimitedError, got %v", last)
+		}
+	})
+
 	t.Run("IP limit throttles independently", func(t *testing.T) {
 		cfg := testCfg()
 		cfg.LoginIPAttemptsPerMin = 2
@@ -271,6 +326,21 @@ func TestLoginHandler(t *testing.T) {
 		}
 		if bodies[0] != bodies[1] {
 			t.Fatal("401 bodies differ — credential oracle")
+		}
+	})
+
+	t.Run("mux keeps 404/405 inside the JSON envelope", func(t *testing.T) {
+		get := httptest.NewRequest(http.MethodGet, "/auth/typo", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, get)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "NOT_FOUND") {
+			t.Fatalf("unknown path: %d %s", rec.Code, rec.Body)
+		}
+		put := httptest.NewRequest(http.MethodPut, "/auth/login", strings.NewReader("{}"))
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, put)
+		if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Body.String(), "METHOD_NOT_ALLOWED") {
+			t.Fatalf("wrong method: %d %s", rec.Code, rec.Body)
 		}
 	})
 

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -20,29 +21,36 @@ type HandlerConfig struct {
 	TrustedProxies []netip.Prefix // empty = trust no proxy (default)
 	CookieSecure   bool           // hosted HTTPS only; local stays false
 	CSRF           *CSRFManager   // required in production wiring
+	Logger         *slog.Logger   // nil-safe; internal errors logged here
 }
 
 // Handler exposes auth use cases over HTTP. Mux() is the router seam:
 // routes are registered in one place here so cards add handlers without
-// editing the server. The mux is NOT mounted publicly until the CSRF
-// gate (C15) lands — cmd/api leaves it unwired.
+// editing the server. cmd/api mounts it publicly under /auth/ (C15).
 type Handler struct {
 	svc     *Service
 	maxBody int64
 	trusted []netip.Prefix
 	secure  bool
 	csrf    *CSRFManager
+	log     *slog.Logger
 }
 
 func NewHandler(svc *Service, cfg HandlerConfig) *Handler {
+	l := cfg.Logger
+	if l == nil {
+		l = slog.New(slog.DiscardHandler)
+	}
 	return &Handler{svc: svc, maxBody: cfg.MaxJSONBody,
-		trusted: cfg.TrustedProxies, secure: cfg.CookieSecure, csrf: cfg.CSRF}
+		trusted: cfg.TrustedProxies, secure: cfg.CookieSecure, csrf: cfg.CSRF, log: l}
 }
 
 // Mux returns the auth route table. Every auth route lives here so the
 // registration seam stays single-source for route/method parity. When a
 // CSRF manager is wired, every mutation is wrapped in the pre-auth
 // challenge check — this is the gate that lets the mux go public.
+// No-method twins + the trailing catch-all keep 404/405 inside the
+// JSON envelope (ServeMux would otherwise emit plaintext).
 func (h *Handler) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /auth/csrf", h.csrfChallenge)
@@ -54,13 +62,41 @@ func (h *Handler) Mux() *http.ServeMux {
 		mux.HandleFunc("POST /auth/logout", h.csrf.RequireCSRF(h.logout))
 		mux.HandleFunc("DELETE /auth/sessions/{id}",
 			h.csrf.RequireCSRF(h.RequireSession(h.revokeOwnSession)))
-		return mux
+	} else {
+		// csrf==nil is a tests-only wiring; production always supplies a
+		// manager (cmd/api constructs one unconditionally).
+		mux.HandleFunc("POST /auth/register", h.register)
+		mux.HandleFunc("POST /auth/login", h.login)
+		mux.HandleFunc("POST /auth/logout", h.logout)
+		mux.HandleFunc("DELETE /auth/sessions/{id}", h.RequireSession(h.revokeOwnSession))
 	}
-	mux.HandleFunc("POST /auth/register", h.register)
-	mux.HandleFunc("POST /auth/login", h.login)
-	mux.HandleFunc("POST /auth/logout", h.logout)
-	mux.HandleFunc("DELETE /auth/sessions/{id}", h.RequireSession(h.revokeOwnSession))
+	for _, p := range []string{"/auth/csrf", "/auth/me", "/auth/sessions",
+		"/auth/register", "/auth/login", "/auth/logout", "/auth/sessions/{id}"} {
+		mux.HandleFunc(p, h.methodNotAllowed)
+	}
+	mux.HandleFunc("/", h.notFound)
 	return mux
+}
+
+// methodNotAllowed renders the envelope twin for a path whose concrete
+// method pattern exists (wrong method → 405 instead of plaintext).
+func (h *Handler) methodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	httpserver.WriteError(w, r, http.StatusMethodNotAllowed,
+		httpserver.ErrMethod, "method not allowed")
+}
+
+func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
+	httpserver.WriteError(w, r, http.StatusNotFound,
+		httpserver.ErrNotFound, "route not found")
+}
+
+// internalError logs the real error (with request id when present) and
+// renders the generic envelope — internals never reach the client.
+func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, err error) {
+	h.log.Error("internal error", "request_id", httpserver.RequestIDFromContext(r.Context()),
+		"route", r.Pattern, "err", err)
+	httpserver.WriteError(w, r, http.StatusInternalServerError,
+		httpserver.ErrInternal, "internal error")
 }
 
 // csrfChallenge issues a fresh signed challenge: readable cookie plus
@@ -74,8 +110,7 @@ func (h *Handler) csrfChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := h.csrf.Issue(w)
 	if err != nil {
-		httpserver.WriteError(w, r, http.StatusInternalServerError,
-			httpserver.ErrInternal, "internal error")
+		h.internalError(w, r, err)
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, map[string]string{"csrf_token": token})
@@ -99,6 +134,18 @@ func (h *Handler) sessionCookie(token string, expires time.Time) *http.Cookie {
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+	// Budget BEFORE body decode + KDF: register is unauthenticated, so
+	// the limiter is what keeps it from being a free Argon2 amplifier.
+	if err := h.svc.CheckRegisterBudget(ClientIP(r, h.trusted)); err != nil {
+		var rl *RateLimitedError
+		if errors.As(err, &rl) {
+			w.Header().Set("Retry-After",
+				strconv.Itoa(int(rl.RetryAfter.Seconds())+1))
+			httpserver.WriteError(w, r, http.StatusTooManyRequests,
+				httpserver.ErrRateLimited, "too many attempts")
+			return
+		}
+	}
 	var in RegisterInput
 	if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {
 		httpserver.WriteErrorFields(w, r, apiErr.Status, apiErr.Code, apiErr.Msg, apiErr.Fields)
@@ -119,9 +166,12 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 			// existing account is active/disabled.
 			httpserver.WriteError(w, r, http.StatusConflict,
 				httpserver.ErrConflict, "registration could not be completed")
+		case errors.Is(err, ErrHashBusy):
+			w.Header().Set("Retry-After", "1")
+			httpserver.WriteError(w, r, http.StatusTooManyRequests,
+				httpserver.ErrRateLimited, "service busy")
 		default:
-			httpserver.WriteError(w, r, http.StatusInternalServerError,
-				httpserver.ErrInternal, "internal error")
+			h.internalError(w, r, err)
 		}
 	}
 }
@@ -153,9 +203,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 			// indistinguishable on the wire.
 			httpserver.WriteError(w, r, http.StatusUnauthorized,
 				httpserver.ErrUnauth, "invalid credentials")
+		case errors.Is(err, ErrHashBusy):
+			w.Header().Set("Retry-After", "1")
+			httpserver.WriteError(w, r, http.StatusTooManyRequests,
+				httpserver.ErrRateLimited, "service busy")
 		default:
-			httpserver.WriteError(w, r, http.StatusInternalServerError,
-				httpserver.ErrInternal, "internal error")
+			h.internalError(w, r, err)
 		}
 	}
 }

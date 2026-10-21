@@ -63,7 +63,9 @@ func mapErr(err error) error {
 	}
 	var pge *pgconn.PgError
 	if errors.As(err, &pge) {
-		if pge.Code == "23505" {
+		// 23505 is ambiguous across tables — discriminate on the
+		// constraint name, not the code alone.
+		if pge.Code == "23505" && pge.ConstraintName == "users_email_key" {
 			return ErrDuplicateEmail
 		}
 		return fmt.Errorf("%w: %s", ErrUnavailable, pge.Code)
@@ -255,11 +257,15 @@ func (r *Repository) RevokeSessionForUser(ctx context.Context, userID, sessionID
 }
 
 // WithUserLock runs fn inside a transaction while holding the user row
-// FOR UPDATE. Privileged mutations re-read the actor under this lock —
-// a middleware-captured principal is only an authentication snapshot,
+// FOR UPDATE. The callback receives the tx so callers compose further
+// locked writes (quota → monitor insert) atomically under the SAME
+// fencing lock — a tx1-recheck/tx2-write split would reopen the
+// TOCTOU this barrier exists to close (lock order: users → …).
+// Privileged mutations re-read the actor under this lock — a
+// middleware-captured principal is only an authentication snapshot,
 // never proof of current privileges.
 func (r *Repository) WithUserLock(ctx context.Context, userID uuid.UUID,
-	fn func(u User) error) error {
+	fn func(tx pgx.Tx, u User) error) error {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 	tx, err := r.pool.Begin(ctx)
@@ -272,7 +278,7 @@ func (r *Repository) WithUserLock(ctx context.Context, userID uuid.UUID,
 	if err != nil {
 		return mapErr(err)
 	}
-	if err := fn(u); err != nil {
+	if err := fn(tx, u); err != nil {
 		return err
 	}
 	return mapErr(tx.Commit(ctx))

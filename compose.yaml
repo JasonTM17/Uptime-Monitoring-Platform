@@ -96,7 +96,7 @@ services:
     environment:
       TEST_DATABASE_URL: postgres://${TEST_POSTGRES_USER}:${TEST_POSTGRES_PASSWORD}@postgres-test:5432/${TEST_POSTGRES_DB}?sslmode=disable
       CGO_ENABLED: "1"
-    command: ["go", "test", "-race", "-count=1", "./..."]
+    command: ["go", "test", "-race", "-tags=integration", "-count=1", "./..."]
     networks: [test]
 
 volumes:

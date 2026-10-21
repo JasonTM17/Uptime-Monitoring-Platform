@@ -10,14 +10,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Sessions are opaque bearer capabilities: the client holds a 32-byte
 // base64url token; the DB stores only its SHA-256 hash, so a leaked
 // row never replays. Expiry is server-clock authoritative — absolute
 // (default 7d) plus sliding idle (default 24h), capped at absolute.
-// last_seen writes coalesce to at most one per minute per session;
-// idle_expires_at still slides on every authenticated touch.
+// last_seen writes coalesce to at most one per minute per session —
+// idle_expires_at slides on each coalesced write, so persisted liveness
+// may lag true activity by up to ~1 minute (documented granularity).
 
 const (
 	sessionTokenBytes = 32
@@ -87,7 +89,7 @@ type SessionStore interface {
 	RevokeSession(ctx context.Context, id uuid.UUID) error
 	ListSessionsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Session, error)
 	RevokeSessionForUser(ctx context.Context, userID, sessionID uuid.UUID) error
-	WithUserLock(ctx context.Context, userID uuid.UUID, fn func(u User) error) error
+	WithUserLock(ctx context.Context, userID uuid.UUID, fn func(tx pgx.Tx, u User) error) error
 }
 
 // CreateSession issues a new session for userID. The repository call

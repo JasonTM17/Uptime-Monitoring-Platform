@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"sync"
 	"time"
 )
 
@@ -36,20 +35,16 @@ func loginKey(kind, raw string) string {
 	return kind + ":" + hex.EncodeToString(sum[:16])
 }
 
-var dummyOnce struct {
-	sync.Once
-	hash string
-	err  error
-}
-
 // dummyHash returns a lazily-generated PHC so unknown-email attempts
-// still execute a real Argon2id verification (uniform KDF path).
+// still execute a real Argon2id verification (uniform KDF path). The
+// Once is per-Service — a global latch would leak state across service
+// instances and pin a transient failure forever.
 func (s *Service) dummyHash() (string, error) {
-	dummyOnce.Do(func() {
-		dummyOnce.hash, dummyOnce.err = s.hasher.HashPassword(context.Background(),
+	s.dummyOnce.Do(func() {
+		s.dummy, s.dummyErr = s.hasher.HashPassword(context.Background(),
 			"dummy-password-for-unknown-users")
 	})
-	return dummyOnce.hash, dummyOnce.err
+	return s.dummy, s.dummyErr
 }
 
 // Login authenticates email+password under IP and account attempt
@@ -64,8 +59,18 @@ func (s *Service) Login(ctx context.Context, in LoginInput, clientIP string) (Is
 	}
 	email := NormalizeEmail(in.Email)
 	acctKey := loginKey("acct", email)
-	if ok, wait := s.acctLimiter.allow(acctKey); !ok {
-		return IssuedSession{}, PublicUser{}, &RateLimitedError{RetryAfter: wait}
+	// The account bucket is a SOFT deny: a saturated bucket still runs
+	// the full auth path, and a VALID credential proves the caller is
+	// the owner — so a third party spamming failures can never
+	// pin-lock the real user out of their own account. The IP bucket
+	// above remains the hard pre-KDF bound on the attacker's volume.
+	acctOK, acctWait := s.acctLimiter.allow(acctKey)
+	// An over-cap password can never match an account: reject uniformly
+	// BEFORE the lookup so known/unknown emails take the same path
+	// (otherwise ErrPasswordTooLong 500s only for registered emails —
+	// an account-existence oracle).
+	if len(in.Password) > maxPasswordBytes {
+		return IssuedSession{}, PublicUser{}, ErrBadCredentials
 	}
 
 	user, err := s.store.FindUserByEmail(ctx, email)
@@ -77,6 +82,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput, clientIP string) (Is
 		if dh, derr := s.dummyHash(); derr == nil {
 			_, _ = s.hasher.VerifyPassword(ctx, in.Password, dh)
 		}
+		if !acctOK { // no owner exists to release the lock
+			return IssuedSession{}, PublicUser{}, &RateLimitedError{RetryAfter: acctWait}
+		}
 		return IssuedSession{}, PublicUser{}, ErrBadCredentials
 	default:
 		return IssuedSession{}, PublicUser{}, err
@@ -87,8 +95,14 @@ func (s *Service) Login(ctx context.Context, in LoginInput, clientIP string) (Is
 		return IssuedSession{}, PublicUser{}, err
 	}
 	if !ok || user.Status != UserStatusActive {
+		if !acctOK {
+			return IssuedSession{}, PublicUser{}, &RateLimitedError{RetryAfter: acctWait}
+		}
 		return IssuedSession{}, PublicUser{}, ErrBadCredentials
 	}
+	// Successful auth releases the account budget — otherwise failed
+	// attempts by a third party pin-lock the real user for the window.
+	s.acctLimiter.reset(acctKey)
 	iss, err := s.CreateSession(ctx, user.ID, "")
 	if err != nil {
 		return IssuedSession{}, PublicUser{}, err

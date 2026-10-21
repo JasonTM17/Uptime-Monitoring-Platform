@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -72,7 +73,11 @@ type Service struct {
 	pol         SessionPolicy
 	ipLimiter   *attemptLimiter
 	acctLimiter *attemptLimiter
+	regLimiter  *attemptLimiter
 	now         func() time.Time
+	dummyOnce   sync.Once
+	dummy       string
+	dummyErr    error
 }
 
 func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Service {
@@ -85,8 +90,20 @@ func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Serv
 		},
 		ipLimiter:   newAttemptLimiter(cfg.LoginIPAttemptsPerMin, time.Minute, cfg.LimiterMaxKeys),
 		acctLimiter: newAttemptLimiter(cfg.LoginAccountAttemptsPer15M, 15*time.Minute, cfg.LimiterMaxKeys),
+		regLimiter:  newAttemptLimiter(cfg.RegisterIPAttemptsPerMin, time.Minute, cfg.LimiterMaxKeys),
 		now:         time.Now,
 	}
+}
+
+// CheckRegisterBudget applies the per-IP register budget BEFORE any
+// KDF work — /auth/register is unauthenticated, so without this an
+// attacker can park the (bounded) Argon2 workers and starve logins.
+// It deliberately shares no bucket with the login limiter.
+func (s *Service) CheckRegisterBudget(clientIP string) error {
+	if ok, wait := s.regLimiter.allow("regip|" + clientIP); !ok {
+		return &RateLimitedError{RetryAfter: wait}
+	}
+	return nil
 }
 
 // PublicUser is the only shape that may leave the service layer — it

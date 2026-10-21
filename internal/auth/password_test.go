@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ func testCfg() config.AuthConfig {
 		SessionIdleExpiry:          24 * time.Hour,
 		LoginIPAttemptsPerMin:      5,
 		LoginAccountAttemptsPer15M: 5,
+		RegisterIPAttemptsPerMin:   5,
 		LimiterMaxKeys:             1000,
 	}
 }
@@ -103,6 +105,8 @@ func TestPassword(t *testing.T) {
 			"$argon2id$v=19$m=65536,t=3,p=1$!!!$BBBB",
 			"$argon2id$v=19$m=65536,t=3,p=1$AAAA$!!!",
 			"$argon2id$v=19$m=65536,t=3,p=1,x=1$AAAA$BBBB",
+			// duplicate param is malformed, never last-wins:
+			"$argon2id$v=19$m=8,t=3,p=1,m=999999999$AAAA$BBBB",
 		}
 		for i, c := range cases {
 			if _, err := h.VerifyPassword(ctx, "pw", c); err == nil || errors.Is(err, ErrCostExceeded) {
@@ -136,7 +140,7 @@ func TestPassword(t *testing.T) {
 }
 
 func TestHashGate(t *testing.T) {
-	g := NewHashGate(2)
+	g := NewHashGate(2, 8) // workers + queue covers all 10 racers
 	ctx := context.Background()
 
 	t.Run("never exceeds worker bound", func(t *testing.T) {
@@ -180,6 +184,26 @@ func TestHashGate(t *testing.T) {
 		if err := g.Acquire(cctx); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected deadline, got %v", err)
 		}
+	})
+
+	t.Run("bounded queue fails fast with ErrHashBusy", func(t *testing.T) {
+		g2 := NewHashGate(1, 1) // 1 running + 1 waiting, 3rd refuses
+		if err := g2.Acquire(ctx); err != nil {
+			t.Fatal(err)
+		}
+		waiterErr := make(chan error, 1)
+		go func() { waiterErr <- g2.Acquire(ctx) }()
+		for len(g2.wait) == 0 { // deterministic: waiter holds the queue slot
+			runtime.Gosched()
+		}
+		if err := g2.Acquire(ctx); !errors.Is(err, ErrHashBusy) {
+			t.Fatalf("expected ErrHashBusy, got %v", err)
+		}
+		g2.Release()
+		if err := <-waiterErr; err != nil {
+			t.Fatalf("waiter did not acquire: %v", err)
+		}
+		g2.Release()
 	})
 }
 

@@ -61,7 +61,11 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if ck, err := r.Cookie(sessionCookieName); err == nil && ck.Value != "" {
 		if sess, _, err := h.svc.authenticateToken(r.Context(), ck.Value); err == nil {
-			_ = h.svc.RevokeSession(r.Context(), sess.ID)
+			if err := h.svc.RevokeSession(r.Context(), sess.ID); err != nil {
+				// Cookie still clears below, but the token stays valid
+				// until expiry — surface it in logs, not to the client.
+				h.log.Error("logout revoke failed", "session_id", sess.ID, "err", err)
+			}
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -82,7 +86,8 @@ func (h *Handler) ownSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	page, size := 1, defaultSessionPageSize
 	if v := r.URL.Query().Get("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+		// Bounded: (page-1)*size must never overflow to a negative OFFSET.
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1<<20 {
 			page = n
 		}
 	}
@@ -93,8 +98,7 @@ func (h *Handler) ownSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions, err := h.svc.ListOwnSessions(r.Context(), p.User.ID, size, (page-1)*size)
 	if err != nil {
-		httpserver.WriteError(w, r, http.StatusInternalServerError,
-			httpserver.ErrInternal, "internal error")
+		h.internalError(w, r, err)
 		return
 	}
 	dtos := make([]sessionDTO, 0, len(sessions))
@@ -131,8 +135,7 @@ func (h *Handler) revokeOwnSession(w http.ResponseWriter, r *http.Request) {
 				httpserver.ErrNotFound, "session not found")
 			return
 		}
-		httpserver.WriteError(w, r, http.StatusInternalServerError,
-			httpserver.ErrInternal, "internal error")
+		h.internalError(w, r, err)
 		return
 	}
 	if id == p.Session.ID {

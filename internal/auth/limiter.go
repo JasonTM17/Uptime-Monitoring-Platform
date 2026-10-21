@@ -15,8 +15,13 @@ import (
 //
 // Invariants:
 //   - keys map is capped — at cap, NEW keys are refused admission
-//     (fail closed as "limited") while existing keys keep their budget;
+//     (fail closed as "limited") while existing keys keep their budget.
+//     Availability tradeoff: an attacker who saturates the map delays
+//     first-time keys for one window; tracked keys are unaffected;
 //   - expired windows are reaped on access and periodically;
+//   - the true bound is 2N per boundary straddle (fixed windows admit
+//     N at the tail of one window and N at the head of the next) —
+//     documented, accepted for the local profile;
 //   - nothing here ever blocks on KDF work (the hash gate is separate).
 type attemptLimiter struct {
 	mu     sync.Mutex
@@ -64,9 +69,18 @@ func (l *attemptLimiter) allow(key string) (bool, time.Duration) {
 	}
 	bk.count++
 	if bk.count > l.max {
-		return false, time.Until(bk.resetAt)
+		return false, bk.resetAt.Sub(now)
 	}
 	return true, 0
+}
+
+// reset clears a key's budget (e.g. the account bucket after a
+// successful login — otherwise an attacker can pin-lock a victim's
+// account with failed attempts).
+func (l *attemptLimiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.b, key)
 }
 
 func (l *attemptLimiter) evictExpiredLocked(now time.Time) {

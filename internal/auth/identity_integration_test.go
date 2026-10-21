@@ -275,7 +275,15 @@ func TestIdentityIsolation(t *testing.T) {
 				cc := f.newClient()
 				cc.challenge()
 				<-start
-				codes[i] = cc.register(dup).Code
+				// A saturated hash gate answers 429 — bounded
+				// backpressure, not a verdict; retry past it.
+				for try := 0; try < 8; try++ {
+					codes[i] = cc.register(dup).Code
+					if codes[i] != http.StatusTooManyRequests {
+						break
+					}
+					time.Sleep(30 * time.Millisecond)
+				}
 			}(i)
 		}
 		close(start) // barrier: all racers release together

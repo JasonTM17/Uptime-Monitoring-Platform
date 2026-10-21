@@ -48,8 +48,17 @@ func TestConcurrentRegistration(t *testing.T) {
 			raw := []string{"Race@Concurrent.Test", "race@concurrent.test",
 				"RACE@CONCURRENT.TEST", " race@concurrent.test ",
 				"rAce@Concurrent.test", "RACE@concurrent.test"}[i]
-			_, err := svc.Register(ctx, auth.RegisterInput{
-				Email: raw, Password: validPW})
+			var err error
+			for try := 0; try < 8; try++ {
+				_, err = svc.Register(ctx, auth.RegisterInput{
+					Email: raw, Password: validPW})
+				// The bounded hash gate is backpressure, not a verdict:
+				// retry past transient saturation (bounded).
+				if !errors.Is(err, auth.ErrHashBusy) {
+					break
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
 			errs[i] = err
 			if err == nil {
 				okCount++
@@ -87,6 +96,9 @@ func intCfg() config.AuthConfig {
 		SessionIdleExpiry:          24 * time.Hour,
 		LoginIPAttemptsPerMin:      5,
 		LoginAccountAttemptsPer15M: 5,
-		LimiterMaxKeys:             1000,
+		// All requests share the httptest RemoteAddr; identity semantics
+		// under test here are not the budget itself (unit-tested).
+		RegisterIPAttemptsPerMin: 1000,
+		LimiterMaxKeys:           1000,
 	}
 }
