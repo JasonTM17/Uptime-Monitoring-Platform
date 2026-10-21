@@ -61,6 +61,7 @@ type DatabaseConfig struct {
 	MaxConns     int32
 	MinConns     int32
 	ConnTimeout  time.Duration
+	QueryTimeout time.Duration
 }
 
 // EngineConfig bounds scheduling and target work.
@@ -160,6 +161,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envDuration(lookup, errs, "DB_CONN_TIMEOUT", &cfg.Database.ConnTimeout)
 	envInt32(lookup, errs, "DB_MAX_CONNS", &cfg.Database.MaxConns)
 	envInt32(lookup, errs, "DB_MIN_CONNS", &cfg.Database.MinConns)
+	envDuration(lookup, errs, "DB_QUERY_TIMEOUT", &cfg.Database.QueryTimeout)
 
 	envInt(lookup, errs, "ENGINE_WORKERS", &cfg.Engine.Workers)
 	envInt(lookup, errs, "ENGINE_QUEUE_SIZE", &cfg.Engine.QueueSize)
@@ -216,9 +218,10 @@ func localDefaults() Config {
 			RequestIDMaxLen:   64,
 		},
 		Database: DatabaseConfig{
-			MaxConns:    10,
-			MinConns:    1,
-			ConnTimeout: 10 * time.Second,
+			MaxConns:     10,
+			MinConns:     1,
+			ConnTimeout:  10 * time.Second,
+			QueryTimeout: 5 * time.Second,
 		},
 		Engine: EngineConfig{
 			Workers:            10,
@@ -255,9 +258,10 @@ func hostedDefaults() Config {
 			RequestIDMaxLen:   64,
 		},
 		Database: DatabaseConfig{
-			MaxConns:    4,
-			MinConns:    0,
-			ConnTimeout: 10 * time.Second,
+			MaxConns:     4,
+			MinConns:     0,
+			ConnTimeout:  10 * time.Second,
+			QueryTimeout: 5 * time.Second,
 		},
 		Engine: EngineConfig{
 			Workers:            2,
@@ -293,6 +297,7 @@ func validate(cfg *Config, errs *LoadError) {
 	bound(errs, "REQUEST_ID_MAX_LEN", cfg.HTTP.RequestIDMaxLen, 8, 128)
 
 	positive(errs, "DB_CONN_TIMEOUT", cfg.Database.ConnTimeout)
+	positive(errs, "DB_QUERY_TIMEOUT", cfg.Database.QueryTimeout)
 	if cfg.Database.MaxConns < 1 {
 		errs.add("DB_MAX_CONNS", "must be >= 1")
 	}

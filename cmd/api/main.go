@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/logger"
 )
@@ -33,6 +34,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv := httpserver.New(cfg, log, nil)
+	pool, err := database.Open(ctx, cfg.Database)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	srv := httpserver.New(cfg, log, database.Ping(pool))
 	return srv.Run(ctx)
 }
