@@ -15,9 +15,9 @@ import (
 // ServiceConfig carries retention + profile policy the read model
 // must surface honestly.
 type ServiceConfig struct {
-	RawRetentionHours    int    // local 720 / hosted-free 24
-	HourlyRetentionDays  int    // 30
-	Profile              string // "local" | "hosted-free"
+	RawRetentionHours   int    // local 720 / hosted-free 24
+	HourlyRetentionDays int    // 30
+	Profile             string // "local" | "hosted-free"
 }
 
 // Service composes repository reads into the contract projections.
@@ -137,23 +137,23 @@ var ErrWindow = errors.New("invalid window")
 // never the requested window while numerators come from retained
 // data.
 type StatsResult struct {
-	WindowStart        time.Time
-	WindowEnd          time.Time
-	DataStart          *time.Time
-	DataEnd            *time.Time
-	Counts             SampleCounts
-	Expected           int64
-	Missed             int64
-	Pending            int64
-	SampleUptime       *float64
-	Coverage           *float64
-	MeanDurationMs     *float64
-	RawRetentionHours  int
+	WindowStart         time.Time
+	WindowEnd           time.Time
+	DataStart           *time.Time
+	DataEnd             *time.Time
+	Counts              SampleCounts
+	Expected            int64
+	Missed              int64
+	Pending             int64
+	SampleUptime        *float64
+	Coverage            *float64
+	MeanDurationMs      *float64
+	RawRetentionHours   int
 	HourlyRetentionDays int
-	RawAvailableFrom   *time.Time
-	Resolution         string // "raw" | "hourly" | "mixed" | "none"
-	IsPartial          bool
-	Series             []BucketPoint
+	RawAvailableFrom    *time.Time
+	Resolution          string // "raw" | "hourly" | "mixed" | "none"
+	IsPartial           bool
+	Series              []BucketPoint
 }
 
 // Statistics computes the merged raw+hourly projection for a
@@ -174,7 +174,7 @@ type StatsResult struct {
 func (s *Service) Statistics(ctx context.Context, ownerID,
 	monID uuid.UUID, ws, we, now time.Time) (StatsResult, error) {
 	res := StatsResult{
-		WindowStart:         ws, WindowEnd: we,
+		WindowStart: ws, WindowEnd: we,
 		RawRetentionHours:   s.cfg.RawRetentionHours,
 		HourlyRetentionDays: s.cfg.HourlyRetentionDays,
 		Resolution:          "none",
@@ -322,16 +322,16 @@ type Quota struct {
 }
 
 type Dashboard struct {
-	Monitors       int64
-	Active         int64
-	Paused         int64
-	Up             int64
-	Down           int64
-	OpenIncidents  int64
+	Monitors        int64
+	Active          int64
+	Paused          int64
+	Up              int64
+	Down            int64
+	OpenIncidents   int64
 	RecentIncidents []IncidentListRow
 	SampleUptime24h *float64
-	Quota          Quota
-	AsOf           time.Time
+	Quota           Quota
+	AsOf            time.Time
 }
 
 func (s *Service) Dashboard(ctx context.Context,

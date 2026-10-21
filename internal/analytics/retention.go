@@ -14,11 +14,11 @@ import (
 // Batches are bounded and every batch is its own commit — a cancel
 // or crash resumes from durable state, never inside a dead tx.
 type RetentionConfig struct {
-	RawRetentionHours    int
-	HourlyRetentionDays  int
-	OutboxRetentionDays  int // terminal SENT/SUPPRESSED intents
-	Batch                int // max rows per commit
-	BatchDelay           time.Duration
+	RawRetentionHours   int
+	HourlyRetentionDays int
+	OutboxRetentionDays int // terminal SENT/SUPPRESSED intents
+	Batch               int // max rows per commit
+	BatchDelay          time.Duration
 }
 
 // RetentionReport counts what a sweep actually removed.

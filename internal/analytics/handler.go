@@ -208,7 +208,7 @@ func (h *Handler) incidents(w http.ResponseWriter, r *http.Request) {
 			dtos[i] = incidentDTO{
 				ID: v.ID, OpenedAt: v.OpenedAt,
 				ResolvedAt: v.ResolvedAt, CloseReason: v.CloseReason,
-				OpenedCheckID: v.OpenedCheckID,
+				OpenedCheckID:   v.OpenedCheckID,
 				ResolvedCheckID: v.ResolvedCheckID,
 			}
 		}
@@ -226,36 +226,36 @@ func (h *Handler) incidents(w http.ResponseWriter, r *http.Request) {
 // REQUEST, data bounds the REPRESENTED interval; they are separate
 // fields on purpose.
 type statsDTO struct {
-	WindowStart         time.Time      `json:"window_start"`
-	WindowEnd           time.Time      `json:"window_end"`
-	DataStart           *time.Time     `json:"data_start"`
-	DataEnd             *time.Time     `json:"data_end"`
-	ValidSamples        int64          `json:"valid_samples"`
-	Successes           int64          `json:"successes"`
-	Failures            int64          `json:"failures"`
-	ExcludedSamples     int64          `json:"excluded_samples"`
-	ExpectedSamples     int64          `json:"expected_samples"`
-	MissedSamples       int64          `json:"missed_samples"`
-	PendingSamples      int64          `json:"pending_samples"`
-	Coverage            *float64       `json:"coverage"`
-	SampleUptime        *float64       `json:"sample_uptime"`
-	MeanDurationMs      *float64       `json:"avg_duration_ms"`
-	RawRetentionHours   int            `json:"raw_retention_hours"`
-	HourlyRetentionDays int            `json:"hourly_retention_days"`
-	RawAvailableFrom    *time.Time     `json:"raw_available_from"`
-	Resolution          string         `json:"resolution"`
-	IsPartial           bool           `json:"is_partial"`
-	Series              []bucketDTO    `json:"series"`
+	WindowStart         time.Time   `json:"window_start"`
+	WindowEnd           time.Time   `json:"window_end"`
+	DataStart           *time.Time  `json:"data_start"`
+	DataEnd             *time.Time  `json:"data_end"`
+	ValidSamples        int64       `json:"valid_samples"`
+	Successes           int64       `json:"successes"`
+	Failures            int64       `json:"failures"`
+	ExcludedSamples     int64       `json:"excluded_samples"`
+	ExpectedSamples     int64       `json:"expected_samples"`
+	MissedSamples       int64       `json:"missed_samples"`
+	PendingSamples      int64       `json:"pending_samples"`
+	Coverage            *float64    `json:"coverage"`
+	SampleUptime        *float64    `json:"sample_uptime"`
+	MeanDurationMs      *float64    `json:"avg_duration_ms"`
+	RawRetentionHours   int         `json:"raw_retention_hours"`
+	HourlyRetentionDays int         `json:"hourly_retention_days"`
+	RawAvailableFrom    *time.Time  `json:"raw_available_from"`
+	Resolution          string      `json:"resolution"`
+	IsPartial           bool        `json:"is_partial"`
+	Series              []bucketDTO `json:"series"`
 }
 
 type bucketDTO struct {
-	BucketStart    time.Time `json:"bucket_start"`
-	ValidSamples   int64     `json:"valid_samples"`
-	Successes      int64     `json:"successes"`
-	Failures       int64     `json:"failures"`
-	Excluded       int64     `json:"excluded_samples"`
-	SampleUptime   *float64  `json:"sample_uptime"`
-	AvgDurationMs  *float64  `json:"avg_duration_ms"`
+	BucketStart   time.Time `json:"bucket_start"`
+	ValidSamples  int64     `json:"valid_samples"`
+	Successes     int64     `json:"successes"`
+	Failures      int64     `json:"failures"`
+	Excluded      int64     `json:"excluded_samples"`
+	SampleUptime  *float64  `json:"sample_uptime"`
+	AvgDurationMs *float64  `json:"avg_duration_ms"`
 }
 
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
@@ -309,16 +309,16 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteJSON(w, r, http.StatusOK, statsDTO{
 			WindowStart: res.WindowStart, WindowEnd: res.WindowEnd,
 			DataStart: res.DataStart, DataEnd: res.DataEnd,
-			ValidSamples:    res.Counts.Valid,
-			Successes:       res.Counts.Successes,
-			Failures:        res.Counts.Failures,
-			ExcludedSamples: res.Counts.Excluded,
-			ExpectedSamples: res.Expected,
-			MissedSamples:   res.Missed,
-			PendingSamples:  res.Pending,
-			Coverage:        res.Coverage,
-			SampleUptime:    res.SampleUptime,
-			MeanDurationMs:  res.MeanDurationMs,
+			ValidSamples:        res.Counts.Valid,
+			Successes:           res.Counts.Successes,
+			Failures:            res.Counts.Failures,
+			ExcludedSamples:     res.Counts.Excluded,
+			ExpectedSamples:     res.Expected,
+			MissedSamples:       res.Missed,
+			PendingSamples:      res.Pending,
+			Coverage:            res.Coverage,
+			SampleUptime:        res.SampleUptime,
+			MeanDurationMs:      res.MeanDurationMs,
 			RawRetentionHours:   res.RawRetentionHours,
 			HourlyRetentionDays: res.HourlyRetentionDays,
 			RawAvailableFrom:    res.RawAvailableFrom,

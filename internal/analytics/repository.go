@@ -51,17 +51,17 @@ func (r *Repository) OwnMonitor(ctx context.Context, ownerID,
 // result fields when present. Slot is the nominal schedule slot —
 // observed timestamps are separate labels.
 type CheckRow struct {
-	RunID       uuid.UUID
-	SlotAt      time.Time
-	StartedAt   *time.Time
-	FinishedAt  *time.Time
-	Status      string
-	Outcome     *string
-	Eligible    *bool
-	Success     *bool
-	HTTPStatus  *int
-	DurationMs  *int64
-	ObservedAt  *time.Time
+	RunID      uuid.UUID
+	SlotAt     time.Time
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Status     string
+	Outcome    *string
+	Eligible   *bool
+	Success    *bool
+	HTTPStatus *int
+	DurationMs *int64
+	ObservedAt *time.Time
 }
 
 // ListChecks pages run history newest-first over slot_at in [from,to).
@@ -282,7 +282,7 @@ func (r *Repository) PendingSlots(ctx context.Context, monID uuid.UUID,
 	return n, err
 }
 
-// RunsInRange counts runs of ANY status whose slot is in [ds,de)  -- 
+// RunsInRange counts runs of ANY status whose slot is in [ds,de)  --
 // the completeness probe for the boundary-hour rule.
 func (r *Repository) RunsInRange(ctx context.Context, monID uuid.UUID,
 	ds, de time.Time) (int64, error) {
@@ -318,8 +318,8 @@ func (r *Repository) BucketAt(ctx context.Context, monID uuid.UUID,
 // at the read edge and stay nil when the denominator is empty — gaps
 // stay null, they are never bridged.
 type BucketPoint struct {
-	BucketStart   time.Time
-	Counts        SampleCounts
+	BucketStart time.Time
+	Counts      SampleCounts
 }
 
 // Series returns per-hour aggregates ordered ascending over [ds,de)
@@ -381,15 +381,15 @@ func (r *Repository) Series(ctx context.Context, monID uuid.UUID,
 // SummaryRow is the owner snapshot behind the dashboard — one
 // consistent read, never a second sample of cap vs count.
 type SummaryRow struct {
-	Monitors        int64
-	Active          int64 // unpaused — says nothing about health
-	Paused          int64
-	Up              int64
-	Down            int64
-	OpenIncidents   int64
-	MonitorLimit    int64
-	Valid24h        int64
-	Success24h      int64
+	Monitors      int64
+	Active        int64 // unpaused — says nothing about health
+	Paused        int64
+	Up            int64
+	Down          int64
+	OpenIncidents int64
+	MonitorLimit  int64
+	Valid24h      int64
+	Success24h    int64
 }
 
 // DashboardSummary reads the owner's aggregate in one snapshot:

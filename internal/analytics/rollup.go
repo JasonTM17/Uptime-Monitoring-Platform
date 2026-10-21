@@ -19,12 +19,12 @@ import (
 // SampleCounts is the mergeable counter set. Ratios are computed
 // only at the read edge — after every merge — never stored.
 type SampleCounts struct {
-	Valid          int64 // eligible evidence (successes + failures)
-	Successes      int64
-	Failures       int64
-	Excluded       int64 // policy/cancel/internal — not evidence
-	DurationSumMs  int64 // eligible rows only
-	DurationCount  int64
+	Valid         int64 // eligible evidence (successes + failures)
+	Successes     int64
+	Failures      int64
+	Excluded      int64 // policy/cancel/internal — not evidence
+	DurationSumMs int64 // eligible rows only
+	DurationCount int64
 }
 
 // MergeSampleCounts adds two counter sets. This is the ONLY lawful

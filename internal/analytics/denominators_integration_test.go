@@ -162,7 +162,7 @@ func TestIntervalChangeDenominator(t *testing.T) {
 		f.segID); err != nil {
 		t.Fatal(err)
 	}
-	seg1 := mkSegmentRow(t, c, f.monID, 1, t0, &end1, 60)   // 5 slots
+	seg1 := mkSegmentRow(t, c, f.monID, 1, t0, &end1, 60)    // 5 slots
 	seg2 := mkSegmentRow(t, c, f.monID, 2, end1, &end2, 120) // 3 slots
 
 	mkResultSeg(t, c, f.monID, seg1, 1, t0, "SUCCESS", true, b(true))
