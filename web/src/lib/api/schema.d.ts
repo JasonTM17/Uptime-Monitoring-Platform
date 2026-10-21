@@ -2481,7 +2481,19 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "monitor_id": "018f3c2a-7f2e-7c51-9f0a-2d1f4a5b6c7d"
+                 *     }
+                 */
+                "application/json": {
+                    /** Format: uuid */
+                    monitor_id: string;
+                };
+            };
+        };
         responses: {
             /** @description Same-window duplicate — existing intent stands */
             200: {

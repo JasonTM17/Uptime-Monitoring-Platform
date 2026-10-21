@@ -1,6 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import { RequireAdmin, RequireAuth, RequireGuest } from "../features/auth/guards";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
+import { IncidentsPage } from "../features/incidents/IncidentsPage";
+import { ChannelsPage } from "../features/notifications/ChannelsPage";
 import { MonitorDetailPage } from "../features/monitors/MonitorDetailPage";
 import { MonitorsPage } from "../features/monitors/MonitorsPage";
 import { LoginPage } from "../features/auth/LoginPage";
@@ -53,8 +55,8 @@ export function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/monitors" element={<MonitorsPage />} />
           <Route path="/monitors/:id" element={<MonitorDetailPage />} />
-          <Route path="/incidents" element={<Pending title="Incidents" />} />
-          <Route path="/channels" element={<Pending title="Channels" />} />
+          <Route path="/incidents" element={<IncidentsPage />} />
+          <Route path="/channels" element={<ChannelsPage />} />
           <Route path="/settings" element={<Pending title="Settings" />} />
           <Route
             path="/admin"

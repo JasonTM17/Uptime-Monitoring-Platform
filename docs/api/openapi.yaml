@@ -1014,6 +1014,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monitor_id]
+              additionalProperties: false
+              description: Owned monitor the channel is bound to — the
+                intent anchors to one concrete causal stream.
+              properties:
+                monitor_id: { type: string, format: uuid }
+            example: { monitor_id: "018f3c2a-7f2e-7c51-9f0a-2d1f4a5b6c7d" }
       responses:
         '202':
           description: TEST intent persisted — the dispatcher claims and sends it
