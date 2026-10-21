@@ -17,6 +17,8 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
   Compose profiles, migration job, safe teardown rules.
 - [Runbook: notification delivery](runbooks/notification-delivery.md):
   pipeline states, causal ordering, operator dead-letter controls.
+- [Runbook: retention](runbooks/retention.md): bounded purge lanes,
+  rollup barrier, protected references, operator checks.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
