@@ -92,6 +92,15 @@ func LockUsers(ctx context.Context, tx pgx.Tx, ids ...uuid.UUID) ([]LockedUser, 
 // permissions granted through the user's role assignments, resolved
 // inside the guarded transaction — no cached snapshot is consulted.
 func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (map[string]bool, error) {
+	// Share-lock the actor's grant rows for the tx duration: a delete
+	// landing between this read and our commit is the stale-permission
+	// wedge — FOR SHARE makes any removal serialize AFTER this tx, so
+	// either the write is honestly first or the removal is.
+	if _, err := tx.Exec(ctx, `
+		SELECT role_id FROM uptime.user_roles
+		WHERE user_id=$1 FOR SHARE`, userID); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT rp.permission_id
 		FROM uptime.user_roles ur

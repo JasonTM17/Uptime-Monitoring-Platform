@@ -21,6 +21,8 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
   rollup barrier, protected references, operator checks.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
+- [Admin security race matrix](testing/admin-security.md): the
+  privileged-recipe linearization order và its concurrency proofs.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
 - [Sampled statistics](architecture/statistics.md): denominator
   partition, raw+hourly merge, represented-window contract.
