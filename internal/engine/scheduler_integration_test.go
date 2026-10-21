@@ -112,8 +112,19 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 	}
 	complete(mon2)
 
-	// Budget exhaustion: seed cap+2 due monitors; total committed runs
-	// in the window must never exceed the global cap.
+	// Budget exhaustion: the window is wall-clock 60s - commits from
+	// earlier suite tests can live inside it, so re-clean for a
+	// deterministic baseline before measuring the cap.
+	for _, tbl := range []string{
+		"check_results", "check_runs", "schedule_segments",
+		"monitor_channels", "monitors",
+	} {
+		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {
+			t.Fatalf("re-clean %s: %v", tbl, err)
+		}
+	}
+	// Seed cap+2 due monitors; committed runs in the window must
+	// never exceed the global cap.
 	for i := 0; i < caps.GlobalPer60s+2; i++ {
 		seed(t)
 	}

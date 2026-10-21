@@ -33,7 +33,7 @@ type DueMonitor struct {
 }
 
 // SelectDue returns at most `limit` monitors whose next_check_at is
-// at/before now — excluding paused/deleted rows and any monitor with
+// at/before now --- excluding paused/deleted rows and any monitor with
 // an in-flight reservation. Bounded query on the monitors_due index;
 // no whole-table scans, no per-monitor queries.
 func SelectDue(ctx context.Context, conn *pgx.Conn, now time.Time, limit int) ([]DueMonitor, error) {
@@ -70,7 +70,7 @@ func SelectDue(ctx context.Context, conn *pgx.Conn, now time.Time, limit int) ([
 
 // RoundRobinOwners interleaves due candidates one-per-owner per round,
 // deterministically: owners sorted by ID, rotated so the owner after
-// `lastServed` leads. Single-owner input passes through unchanged —
+// `lastServed` leads. Single-owner input passes through unchanged ---
 // fairness never caps one owner's utilization (F02).
 func RoundRobinOwners(due []DueMonitor, lastServed uuid.UUID) []DueMonitor {
 	if len(due) == 0 {
@@ -108,7 +108,7 @@ func RoundRobinOwners(due []DueMonitor, lastServed uuid.UUID) []DueMonitor {
 }
 
 // Scheduler coordinates bounded due-selection, fair admission, and
-// enqueue. It is the only caller of Submit — workers never produce.
+// enqueue. It is the only caller of Submit --- workers never produce.
 type Scheduler struct {
 	writer     *Writer
 	pool       *WorkerPool
@@ -116,6 +116,7 @@ type Scheduler struct {
 	batchLimit int
 	clock      Clock
 	lastOwner  uuid.UUID
+	lastErr    error // last denied reservation - diagnostic only
 
 	// Seams for deterministic unit tests; production wires the real
 	// DB-backed implementations in NewScheduler.
@@ -160,9 +161,13 @@ func (s *Scheduler) SetReserver(f func(context.Context, DueMonitor) (*Reservatio
 	s.reserve = f
 }
 
+// LastErr exposes the most recent denied reservation for tests and
+// operational diagnostics; nil when the last round had no denial.
+func (s *Scheduler) LastErr() error { return s.lastErr }
+
 // Tick runs one bounded admission round: fetch due candidates, order
 // them fairly, then reserve+enqueue while capacity exists. A full
-// queue or full window stops the round — due monitors stay in the DB
+// queue or full window stops the round --- due monitors stay in the DB
 // for the next tick; there is no catch-up amplification.
 func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 	due, err := s.selectDue(ctx)
@@ -184,7 +189,7 @@ func (s *Scheduler) Tick(ctx context.Context) (admitted int, err error) {
 			s.lastOwner = cand.OwnerID // rotate past the denied owner
 			return admitted, nil
 		case err != nil:
-			continue // not due / raced / inactive — move to next candidate
+			continue // not due / raced / inactive --- move to next candidate
 		}
 		job := Job{
 			RunID: res.RunID, MonitorID: res.MonitorID,
