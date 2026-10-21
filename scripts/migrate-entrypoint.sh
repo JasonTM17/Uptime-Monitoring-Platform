@@ -18,11 +18,20 @@ case "$ACTION" in
   *)
     # Anything that can move the schema backwards, sideways, or rewrite
     # history (down, drop, goto, force, ...) is destructive: allowed only
-    # against the disposable test database with an explicit opt-in.
+    # against the disposable test database with an explicit opt-in, and
+    # the DSN must actually point at postgres-test — a self-declared
+    # label alone is not proof of target (Kongming phase-01 item 3).
     if [ "$MIGRATE_TARGET" != "test" ] || [ "$MIGRATE_ALLOW_DESTRUCTIVE" != "true" ]; then
       echo "refusing destructive migration '$ACTION' (target=$MIGRATE_TARGET destructive=$MIGRATE_ALLOW_DESTRUCTIVE)" >&2
       exit 2
     fi
+    case "$DATABASE_URL" in
+      *@postgres-test:*) ;;
+      *)
+        echo "refusing destructive migration '$ACTION': DSN is not postgres-test" >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac
 

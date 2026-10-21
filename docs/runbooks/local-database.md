@@ -33,9 +33,16 @@ docker compose --profile test run --rm migrate-test up    # test DB
 docker compose --profile tools run --rm migrate version   # inspect
 ```
 
-Destructive directions (`down`, `drop`) are refused unless
-`MIGRATE_TARGET=test` and `MIGRATE_ALLOW_DESTRUCTIVE=true`; the local
-database cannot be migrated down through this job.
+Destructive directions (`down`, `drop`, `goto`, `force`, anything not
+`up|version`) are refused unless `MIGRATE_TARGET=test`,
+`MIGRATE_ALLOW_DESTRUCTIVE=true`, **and** the DSN actually points at
+`postgres-test`; the local database cannot be migrated down through this
+job. The sanctioned override for the disposable test DB only:
+
+```sh
+docker compose --profile test run --rm \
+  -e MIGRATE_ALLOW_DESTRUCTIVE=true migrate-test down
+```
 
 ## Test profile
 
