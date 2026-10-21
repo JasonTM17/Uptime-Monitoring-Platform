@@ -20,7 +20,15 @@
 //   - Placeholder-shaped values (${VAR}, replace-me, <yours>, ...) do not
 //     count as secrets.
 //   - Findings print file:line + rule name with the match fully masked.
-//   - Binary blobs and staged deletions are skipped (documented scope).
+//   - UTF-16 BOM blobs decode and scan; NUL blobs without BOM skip as
+//     binary (documented scope). Unreadable staged blobs fail closed.
+//   - The pre-commit hook requires this file byte-identical to HEAD;
+//     gate updates go in their own commit with SCANNER_UPDATE=1.
+//   - Known limits (documented scope): unstaged content, history,
+//     --no-verify/merge/other-clone paths, binaries, secrets below the
+//     12-char floor, multi-line values, placeholder-substring real
+//     secrets, and shapes with no rule. The hook is local-clone only —
+//     remote enforcement needs a CI diff-scan job (publication gate).
 //   - Exit 0 clean, 2 on findings or refusals. Unhandled errors exit
 //     non-zero (fail closed).
 
@@ -33,7 +41,7 @@ const RULES = [
   { name: 'telegram-bot-token', re: /\b\d{6,12}:[A-Za-z0-9_-]{35}\b/ },
   {
     name: 'dsn-with-password',
-    re: /\b(?:postgres(?:ql)?|mysql2?|mariadb|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s:/]+:[^\s@/]{3,}@/,
+    re: /\b(?:postgres(?:ql)?|mysql2?|mariadb|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s:/]*:[^\s@/]{3,}@/,
   },
   { name: 'pem-private-key', re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/ },
   { name: 'aws-access-key-id', re: /\bAKIA[0-9A-Z]{16}\b/ },
@@ -42,7 +50,7 @@ const RULES = [
   { name: 'jwt', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/ },
   {
     name: 'generic-assigned-secret',
-    re: /(?:api[-_]?key|access[-_]?key|secret|token|pass(?:word|phrase|wd)?|pwd|credential|private[-_]?key)[-._a-z0-9]*\s*[:=]\s*['"]?[^\s'"]{12,}/i,
+    re: /(?:api[-_]?key|access[-_]?key|secret|token|pass(?:word|phrase|wd)?|pwd|credential|private[-_]?key)[-._a-z0-9]*['"]?\s*[:=]\s*(?:['"][^'"]{12,}['"]|['"]?[^\s'"]{12,})/i,
   },
 ];
 
@@ -64,11 +72,12 @@ const NAME_REFUSAL = [
 // exempt from NAME refusal but never from content scanning.
 const NAME_EXEMPT = [/\.(example|sample|template|dist)$/i, /(^|\/)scripts\/testdata\//];
 
-// Content inside these paths is never scanned (inert fixtures live here,
-// including this file's own self-test literals).
+// Content inside these repo-root paths is never scanned (inert fixtures
+// live here, including this file's own self-test literals). Anchored to
+// the repo root — a nested */scripts/testdata/ is NOT exempt.
 const CONTENT_EXEMPT = [
-  /(^|\/)scripts\/testdata\//,
-  /(^|\/)scripts\/check-staged-secrets\.mjs$/,
+  /^scripts\/testdata\//,
+  /^scripts\/check-staged-secrets\.mjs$/,
 ];
 
 // A match that contains a placeholder marker is not a secret.
@@ -102,7 +111,7 @@ function scanText(lines) {
 function stagedPaths() {
   const out = execFileSync(
     'git',
-    ['diff', '--cached', '--name-status', '-z', '--diff-filter=ACMR'],
+    ['diff', '--cached', '--name-status', '-z', '--diff-filter=ACMRT'],
     { encoding: 'utf8' },
   );
   const tokens = out.split('\0').filter(Boolean);
@@ -123,6 +132,19 @@ function stagedPaths() {
 
 function stagedBlobText(path) {
   const buf = execFileSync('git', ['show', ':' + path], { maxBuffer: 64 * 1024 * 1024 });
+  // BOM-marked UTF-16 text (PowerShell's default Out-File output) decodes
+  // to text; NUL without a BOM is treated as a binary blob and skipped.
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return buf.toString('utf16le').split('\n');
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const swapped = Buffer.allocUnsafe(buf.length);
+    for (let i = 0; i + 1 < buf.length; i += 2) {
+      swapped[i] = buf[i + 1];
+      swapped[i + 1] = buf[i];
+    }
+    return swapped.toString('utf16le').split('\n');
+  }
   if (buf.includes(0)) return null; // binary blob: documented skip
   return buf.toString('utf8').split('\n');
 }
@@ -143,8 +165,12 @@ function runScan() {
     let lines;
     try {
       lines = stagedBlobText(p);
-    } catch {
-      continue; // staged deletion or unreadable gitlink
+    } catch (e) {
+      // Deletions are excluded by the diff filter; anything else that
+      // cannot be read fails closed rather than silently passing.
+      console.log(`ERROR ${p}: cannot read staged blob (${e.code || e.message})`);
+      failed = true;
+      continue;
     }
     if (lines === null) continue;
     for (const f of scanText(lines)) {
@@ -171,6 +197,10 @@ function selfTest() {
     ['detects aws-style secret', scanText(['aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYk7d3mPqR']).length > 0],
     ['skips aws documented example', scanText(['aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY']).length === 0],
     ['detects short password', scanText(['DB_PASS=Sup3rSecret123']).length > 0],
+    ['detects quoted JSON key', scanText(['{"db_password": "Kr9mQ2zLp8vXw4"}']).length > 0],
+    ['detects TOML quoted key', scanText(['db_password = "Kr9mQ2zLp8vXw4"']).length > 0],
+    ['detects quoted value with spaces', scanText(['DB_PASS="v3ry s3cret passphrase"']).length > 0],
+    ['detects userless dsn', scanText(['CACHE_URL=redis://:Str0ngP4ssw0rd@cache.internal']).length > 0],
     ['detects mysql dsn', scanText(['dsn=mysql://u:passw0rd@h/db']).length > 0],
     ['detects DSA pem', scanText(['-----BEGIN DSA PRIVATE KEY-----']).length > 0],
     ['detects github token', scanText(['ghp_' + 'a'.repeat(36)]).length > 0],
@@ -191,6 +221,8 @@ function selfTest() {
     ['allows .env.production.example name but still scans', !isSensitivePath('.env.production.example') && !isContentExempt('.env.production.example')],
     ['allows fixture dir fully', !isSensitivePath('scripts/testdata/fixtures/leaky.txt') && isContentExempt('scripts/testdata/fixtures/leaky.txt')],
     ['skips own source (self-test literals)', isContentExempt('scripts/check-staged-secrets.mjs')],
+    ['nested testdata NOT exempt', !isContentExempt('services/api/scripts/testdata/x.env')],
+    ['redis host:port no auth passes', scanText(['r=redis://cache.internal:6379/0']).length === 0],
     ['clean fixture passes', scanText(clean).length === 0],
   ];
   let ok = true;

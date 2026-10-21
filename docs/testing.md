@@ -52,8 +52,15 @@ container job, not the Windows local gate.
 The staged-secrets gate reads each staged blob directly (not the diff), so
 diff-prefix, quoting, attribute, and context-line tricks cannot bypass it.
 It refuses sensitive filenames, scans example-suffixed files for real
-secrets, and skips placeholder-shaped values (`${VAR}`, `replace-me`,
-`<yours>`). Known residual limits, by design: unstaged file content, commit
-history, binary blobs, and secrets that match no rule (high-entropy values
-without recognizable shape) — review those at publication gates, not per
-commit.
+secrets, decodes UTF-16 BOM text, and skips placeholder-shaped values
+(`${VAR}`, `replace-me`, `<yours>`). The pre-commit hook also requires the
+scanner file itself byte-identical to `HEAD`; a deliberate gate update goes
+in its own commit with `SCANNER_UPDATE=1 git commit ...`.
+
+Known residual limits, by design: unstaged file content and history;
+`--no-verify`, `merge`/`rebase`/`cherry-pick`, other clones, and pushes —
+the hook is local-clone only, so remote enforcement waits for a CI
+diff-scan job (a publication-gate item); binary blobs without a UTF-16
+BOM; secrets under the 12-char floor, multi-line/heredoc values, real
+secrets containing placeholder substrings, and shapes with no rule —
+review those at publication gates, not per commit.
