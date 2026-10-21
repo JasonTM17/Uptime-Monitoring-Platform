@@ -1063,7 +1063,12 @@ paths:
             No secrets — never raw metrics or provider data.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminOverview' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '503': { description: Dependency unavailable (not a healthy zero) }
@@ -1089,7 +1094,12 @@ paths:
             Keyset on (created_at,id) DESC — equal timestamps never dup/skip.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminUsersPage' }
         '400': { description: Invalid/mismatched cursor or unknown filter value }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1102,7 +1112,16 @@ paths:
       operationId: getAdminUser
       parameters: [ { $ref: '#/components/parameters/IdPath' } ]
       responses:
-        '200': { description: Safe account projection + counts }
+        '200':
+          description: Safe account projection + counts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminUserDetail' }
         '400': { description: Malformed id }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1127,7 +1146,12 @@ paths:
             path/query secrets never leave the store.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminMonitorsPage' }
         '400': { description: Invalid cursor or filter }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1146,7 +1170,12 @@ paths:
             freshness. Explicit "absent" when evidence is missing.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminOperations' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '503': { description: Dependency unavailable }
@@ -1168,7 +1197,12 @@ paths:
             payload and destination never leave the store.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminOutboxPage' }
         '400': { description: Invalid cursor or filter }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1195,7 +1229,12 @@ paths:
             the projection adds no new sensitive data.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminAuditPage' }
         '400': { description: Invalid cursor, filter, or >90d window }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1208,7 +1247,16 @@ paths:
       operationId: getAdminAuditEvent
       parameters: [ { $ref: '#/components/parameters/IdPath' } ]
       responses:
-        '200': { description: Audit row with safe_diff }
+        '200':
+          description: Audit row with safe_diff
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminAuditRow' }
         '400': { description: Malformed id }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
@@ -1225,7 +1273,12 @@ paths:
           description: Catalog, presets, custom roles, ceiling, requires
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminRoleCatalog' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
@@ -1235,12 +1288,32 @@ paths:
       parameters:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name, permissions, reason]
+              properties:
+                code: { type: string, pattern: "^[A-Z][A-Z0-9_]{1,39}$" }
+                name: { type: string, minLength: 1, maxLength: 80 }
+                permissions:
+                  type: array
+                  items: { type: string }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '201':
           description: Role created
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminRoleEnvelope' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -1265,12 +1338,32 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [permissions, expected_version, reason]
+              properties:
+                name: { type: string, maxLength: 80 }
+                permissions:
+                  type: array
+                  items: { type: string }
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Role updated; every holder's security epoch advanced
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminRoleEnvelope' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1286,12 +1379,31 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role_ids, expected_version, reason]
+              properties:
+                role_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Role set replaced; subject security epoch advanced
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminAssignResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1316,12 +1428,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version, reason]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Account disabled (idempotent — repeated suspend returns already:true)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminUserStatusResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1346,12 +1474,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version, reason]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Account active (eligible monitors due at first future slot)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminUserStatusResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1367,12 +1511,28 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version, reason]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Sessions revoked (count only — no tokens or client data)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminRevokeSessionsResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1388,12 +1548,29 @@ paths:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [monitor_limit, expected_version, reason]
+              properties:
+                monitor_limit: { type: integer, minimum: 0 }
+                expected_version: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
         '200':
           description: Cap updated (bounded counts, no resource data)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DataEnvelope' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AdminQuotaResult' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1663,6 +1840,212 @@ components:
         display_name: { type: string }
         status: { type: string, enum: [ACTIVE, DISABLED] }
         created_at: { type: string, format: date-time }
+    AdminUserRow:
+      type: object
+      required: [id, email, status, monitor_limit, monitors_live, sessions_live, roles, created_at]
+      description: Safe projection — never hash, TOTP, or token material.
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        monitor_limit: { type: integer }
+        monitors_live: { type: integer }
+        sessions_live: { type: integer }
+        roles: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        disabled_at: { type: [string, "null"], format: date-time }
+    AdminUsersPage:
+      type: object
+      properties:
+        users: { type: array, items: { $ref: '#/components/schemas/AdminUserRow' } }
+        next_cursor: { type: [string, "null"] }
+    AdminUserDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminUserRow'
+        - type: object
+          properties:
+            security_version: { type: integer }
+            version: { type: integer }
+    AdminRole:
+      type: object
+      required: [id, code, name, is_preset, version, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        is_preset: { type: boolean }
+        version: { type: integer }
+        permissions: { type: array, items: { type: string } }
+    AdminPermissionInfo:
+      type: object
+      required: [id, requires]
+      properties:
+        id: { type: string }
+        requires: { type: array, items: { type: string } }
+    AdminRoleCatalog:
+      type: object
+      required: [catalog, roles, delegation_ceiling]
+      properties:
+        catalog: { type: array, items: { $ref: '#/components/schemas/AdminPermissionInfo' } }
+        roles: { type: array, items: { $ref: '#/components/schemas/AdminRole' } }
+        delegation_ceiling: { type: array, items: { type: string } }
+    AdminRoleEnvelope:
+      type: object
+      properties:
+        role: { $ref: '#/components/schemas/AdminRole' }
+    AdminAssignResult:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        role_ids: { type: array, items: { type: string, format: uuid } }
+        security_version: { type: integer }
+    AdminUserStatusResult:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        already: { type: boolean }
+    AdminRevokeSessionsResult:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        sessions_revoked: { type: integer }
+        security_version: { type: integer }
+    AdminQuotaResult:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        monitor_limit: { type: integer }
+    AdminMonitorRow:
+      type: object
+      required: [id, owner_id, name, target, health, is_paused, generation, next_check_at, created_at]
+      description: Redacted projection — target reduced to scheme+host.
+      properties:
+        id: { type: string, format: uuid }
+        owner_id: { type: string, format: uuid }
+        name: { type: string }
+        target: { type: string }
+        health: { type: string, enum: [UP, DOWN, UNKNOWN] }
+        is_paused: { type: boolean }
+        generation: { type: integer }
+        last_checked_at: { type: [string, "null"], format: date-time }
+        next_check_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    AdminMonitorsPage:
+      type: object
+      properties:
+        monitors: { type: array, items: { $ref: '#/components/schemas/AdminMonitorRow' } }
+        next_cursor: { type: [string, "null"] }
+    AdminOutboxRow:
+      type: object
+      required: [id, monitor_id, event_kind, state, attempts, created_at, version]
+      description: Lifecycle only — payload and destination never leave the store.
+      properties:
+        id: { type: string, format: uuid }
+        monitor_id: { type: string, format: uuid }
+        incident_id: { type: [string, "null"], format: uuid }
+        event_kind: { type: string }
+        state: { type: string, enum: [PENDING, LEASED, SENT, DEAD, SUPPRESSED] }
+        attempts: { type: integer }
+        next_attempt_at: { type: [string, "null"], format: date-time }
+        last_error_code: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        version: { type: integer }
+    AdminOutboxPage:
+      type: object
+      properties:
+        deliveries: { type: array, items: { $ref: '#/components/schemas/AdminOutboxRow' } }
+        next_cursor: { type: [string, "null"] }
+    AdminAuditRow:
+      type: object
+      required: [id, actor_kind, action, subject_type, subject_id, outcome, request_id, created_at]
+      description: safe_diff already redacted at write.
+      properties:
+        id: { type: string, format: uuid }
+        actor_id: { type: [string, "null"], format: uuid }
+        actor_kind: { type: string }
+        action: { type: string }
+        subject_type: { type: string }
+        subject_id: { type: string }
+        reason: { type: string }
+        outcome: { type: string }
+        diff: { type: object }
+        request_id: { type: string }
+        created_at: { type: string, format: date-time }
+    AdminAuditPage:
+      type: object
+      properties:
+        events: { type: array, items: { $ref: '#/components/schemas/AdminAuditRow' } }
+        next_cursor: { type: [string, "null"] }
+    AdminOverview:
+      type: object
+      properties:
+        users:
+          type: object
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            disabled: { type: integer }
+        monitors:
+          type: object
+          properties:
+            total: { type: integer }
+            paused: { type: integer }
+            up: { type: integer }
+            down: { type: integer }
+        sessions:
+          type: object
+          properties: { live: { type: integer } }
+        incidents:
+          type: object
+          properties: { open: { type: integer } }
+        outbox:
+          type: object
+          properties:
+            pending: { type: integer }
+            leased: { type: integer }
+            dead: { type: integer }
+        engine:
+          type: object
+          description: freshness is fresh|stale|absent — never a healthy zero.
+          properties:
+            epoch: { type: integer }
+            heartbeat_at: { type: [string, "null"], format: date-time }
+            freshness: { type: string, enum: [fresh, stale, absent] }
+            stale_after_seconds: { type: integer }
+        database:
+          type: object
+          properties: { reachable: { type: boolean } }
+    AdminOperations:
+      type: object
+      properties:
+        engine:
+          type: object
+          properties:
+            epoch: { type: integer }
+            owner_instance: { type: [string, "null"] }
+            heartbeat_at: { type: [string, "null"], format: date-time }
+            freshness: { type: string, enum: [fresh, stale, absent] }
+            stale_after_seconds: { type: integer }
+        runs:
+          type: object
+          properties:
+            reserved: { type: integer }
+            running: { type: integer }
+        outbox:
+          type: object
+          properties:
+            pending: { type: integer }
+            leased: { type: integer }
+            dead: { type: integer }
+            oldest_pending: { type: [string, "null"], format: date-time }
+            oldest_age_seconds: { type: [integer, "null"] }
+        rollup:
+          type: object
+          properties:
+            last_bucket: { type: [string, "null"], format: date-time }
+            freshness: { type: string, enum: [fresh, stale, absent] }
     SessionDTO:
       type: object
       required: [id, device_label, created_at, last_seen_at, expires_at, current]

@@ -4,6 +4,10 @@ import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { IncidentsPage } from "../features/incidents/IncidentsPage";
 import { ChannelsPage } from "../features/notifications/ChannelsPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { OverviewPage } from "../features/admin/OverviewPage";
+import { UsersPage } from "../features/admin/identity/UsersPage";
+import { UserDetailPage } from "../features/admin/identity/UserDetailPage";
+import { RolesPage } from "../features/admin/identity/RolesPage";
 import { MonitorDetailPage } from "../features/monitors/MonitorDetailPage";
 import { MonitorsPage } from "../features/monitors/MonitorsPage";
 import { LoginPage } from "../features/auth/LoginPage";
@@ -63,7 +67,31 @@ export function App() {
             path="/admin"
             element={
               <RequireAdmin>
-                <Pending title="Admin overview" />
+                <OverviewPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/users/:id"
+            element={
+              <RequireAdmin>
+                <UserDetailPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/roles"
+            element={
+              <RequireAdmin>
+                <RolesPage />
               </RequireAdmin>
             }
           />

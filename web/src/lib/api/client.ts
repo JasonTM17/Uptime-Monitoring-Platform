@@ -66,6 +66,9 @@ export function resetCsrf(): void {
 interface RequestOptions {
   body?: unknown;
   signal?: AbortSignal;
+  // Privileged admin mutations replay under this key — generated once
+  // per user intent and kept stable across retries of the same intent.
+  idempotencyKey?: string;
 }
 
 async function raw<T>(
@@ -78,6 +81,8 @@ async function raw<T>(
   if (mutating) {
     headers["X-CSRF-Token"] = csrfHeader ?? "";
     headers["Content-Type"] = "application/json";
+    if (opts.idempotencyKey)
+      headers["Idempotency-Key"] = opts.idempotencyKey;
   }
   const res = await fetch(`/api${path}`, {
     method: method.toUpperCase(),

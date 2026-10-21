@@ -972,6 +972,209 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /** @description Safe projection — never hash, TOTP, or token material. */
+        AdminUserRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: email */
+            email: string;
+            display_name?: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "DISABLED";
+            monitor_limit: number;
+            monitors_live: number;
+            sessions_live: number;
+            roles: string[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            disabled_at?: string | null;
+        };
+        AdminUsersPage: {
+            users?: components["schemas"]["AdminUserRow"][];
+            next_cursor?: string | null;
+        };
+        AdminUserDetail: components["schemas"]["AdminUserRow"] & {
+            security_version?: number;
+            version?: number;
+        };
+        AdminRole: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            is_preset: boolean;
+            version: number;
+            permissions: string[];
+        };
+        AdminPermissionInfo: {
+            id: string;
+            requires: string[];
+        };
+        AdminRoleCatalog: {
+            catalog: components["schemas"]["AdminPermissionInfo"][];
+            roles: components["schemas"]["AdminRole"][];
+            delegation_ceiling: string[];
+        };
+        AdminRoleEnvelope: {
+            role?: components["schemas"]["AdminRole"];
+        };
+        AdminAssignResult: {
+            /** Format: uuid */
+            user_id?: string;
+            role_ids?: string[];
+            security_version?: number;
+        };
+        AdminUserStatusResult: {
+            /** Format: uuid */
+            user_id?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "DISABLED";
+            already?: boolean;
+        };
+        AdminRevokeSessionsResult: {
+            /** Format: uuid */
+            user_id?: string;
+            sessions_revoked?: number;
+            security_version?: number;
+        };
+        AdminQuotaResult: {
+            /** Format: uuid */
+            user_id?: string;
+            monitor_limit?: number;
+        };
+        /** @description Redacted projection — target reduced to scheme+host. */
+        AdminMonitorRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            owner_id: string;
+            name: string;
+            target: string;
+            /** @enum {string} */
+            health: "UP" | "DOWN" | "UNKNOWN";
+            is_paused: boolean;
+            generation: number;
+            /** Format: date-time */
+            last_checked_at?: string | null;
+            /** Format: date-time */
+            next_check_at: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminMonitorsPage: {
+            monitors?: components["schemas"]["AdminMonitorRow"][];
+            next_cursor?: string | null;
+        };
+        /** @description Lifecycle only — payload and destination never leave the store. */
+        AdminOutboxRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            monitor_id: string;
+            /** Format: uuid */
+            incident_id?: string | null;
+            event_kind: string;
+            /** @enum {string} */
+            state: "PENDING" | "LEASED" | "SENT" | "DEAD" | "SUPPRESSED";
+            attempts: number;
+            /** Format: date-time */
+            next_attempt_at?: string | null;
+            last_error_code?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            version: number;
+        };
+        AdminOutboxPage: {
+            deliveries?: components["schemas"]["AdminOutboxRow"][];
+            next_cursor?: string | null;
+        };
+        /** @description safe_diff already redacted at write. */
+        AdminAuditRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            actor_id?: string | null;
+            actor_kind: string;
+            action: string;
+            subject_type: string;
+            subject_id: string;
+            reason?: string;
+            outcome: string;
+            diff?: Record<string, never>;
+            request_id: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminAuditPage: {
+            events?: components["schemas"]["AdminAuditRow"][];
+            next_cursor?: string | null;
+        };
+        AdminOverview: {
+            users?: {
+                total?: number;
+                active?: number;
+                disabled?: number;
+            };
+            monitors?: {
+                total?: number;
+                paused?: number;
+                up?: number;
+                down?: number;
+            };
+            sessions?: {
+                live?: number;
+            };
+            incidents?: {
+                open?: number;
+            };
+            outbox?: {
+                pending?: number;
+                leased?: number;
+                dead?: number;
+            };
+            /** @description freshness is fresh|stale|absent — never a healthy zero. */
+            engine?: {
+                epoch?: number;
+                /** Format: date-time */
+                heartbeat_at?: string | null;
+                /** @enum {string} */
+                freshness?: "fresh" | "stale" | "absent";
+                stale_after_seconds?: number;
+            };
+            database?: {
+                reachable?: boolean;
+            };
+        };
+        AdminOperations: {
+            engine?: {
+                epoch?: number;
+                owner_instance?: string | null;
+                /** Format: date-time */
+                heartbeat_at?: string | null;
+                /** @enum {string} */
+                freshness?: "fresh" | "stale" | "absent";
+                stale_after_seconds?: number;
+            };
+            runs?: {
+                reserved?: number;
+                running?: number;
+            };
+            outbox?: {
+                pending?: number;
+                leased?: number;
+                dead?: number;
+                /** Format: date-time */
+                oldest_pending?: string | null;
+                oldest_age_seconds?: number | null;
+            };
+            rollup?: {
+                /** Format: date-time */
+                last_bucket?: string | null;
+                /** @enum {string} */
+                freshness?: "fresh" | "stale" | "absent";
+            };
+        };
         SessionDTO: {
             /** Format: uuid */
             id: string;
@@ -2558,7 +2761,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminOverview"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -2595,7 +2800,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminUsersPage"];
+                    };
                 };
             };
             /** @description Invalid/mismatched cursor or unknown filter value */
@@ -2632,7 +2839,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminUserDetail"];
+                    };
+                };
             };
             /** @description Malformed id */
             400: {
@@ -2674,7 +2885,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminMonitorsPage"];
+                    };
                 };
             };
             /** @description Invalid cursor or filter */
@@ -2710,7 +2923,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminOperations"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -2743,7 +2958,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminOutboxPage"];
+                    };
                 };
             };
             /** @description Invalid cursor or filter */
@@ -2788,7 +3005,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminAuditPage"];
+                    };
                 };
             };
             /** @description Invalid cursor */
@@ -2825,7 +3044,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminAuditRow"];
+                    };
+                };
             };
             /** @description Malformed id */
             400: {
@@ -2861,7 +3084,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminRoleCatalog"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -2887,7 +3112,16 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                    name: string;
+                    permissions: string[];
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Role created */
             201: {
@@ -2895,7 +3129,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminRoleEnvelope"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -2945,7 +3181,16 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    permissions: string[];
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Role updated; every holder's security epoch advanced */
             200: {
@@ -2953,7 +3198,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminRoleEnvelope"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -2984,7 +3231,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    role_ids: string[];
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Role set replaced; subject security epoch advanced */
             200: {
@@ -2992,7 +3247,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminAssignResult"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -3040,7 +3297,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Account disabled (idempotent — repeated suspend returns already:true) */
             200: {
@@ -3048,7 +3312,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminUserStatusResult"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -3096,7 +3362,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Account active (eligible monitors due at first future slot) */
             200: {
@@ -3104,7 +3377,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminUserStatusResult"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -3135,7 +3410,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Sessions revoked (count only — no tokens or client data) */
             200: {
@@ -3143,7 +3425,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminRevokeSessionsResult"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -3174,7 +3458,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    monitor_limit: number;
+                    expected_version: number;
+                    reason: string;
+                };
+            };
+        };
         responses: {
             /** @description Cap updated (bounded counts, no resource data) */
             200: {
@@ -3182,7 +3474,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataEnvelope"];
+                    "application/json": components["schemas"]["DataEnvelope"] & {
+                        data?: components["schemas"]["AdminQuotaResult"];
+                    };
                 };
             };
             401: components["responses"]["Unauthenticated"];
