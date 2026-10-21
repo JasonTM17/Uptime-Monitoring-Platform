@@ -14,7 +14,7 @@ import (
 type Store interface {
 	CreateMonitor(ctx context.Context, ownerID uuid.UUID, in WriteFields, caps Caps) (Monitor, error)
 	GetMonitor(ctx context.Context, ownerID, id uuid.UUID) (Monitor, error)
-	ListMonitors(ctx context.Context, ownerID uuid.UUID, after Cursor, limit int) ([]Monitor, error)
+	ListMonitors(ctx context.Context, ownerID uuid.UUID, after Cursor, filter ListFilter, limit int) ([]Monitor, error)
 	UpdateMonitor(ctx context.Context, ownerID, id uuid.UUID, expectedGen int64, in WriteFields) (Monitor, error)
 	SetMonitorPaused(ctx context.Context, ownerID, id uuid.UUID, expectedGen int64, paused bool) (Monitor, error)
 	SoftDeleteMonitor(ctx context.Context, ownerID, id uuid.UUID, expectedGen int64) error
@@ -167,6 +167,6 @@ func (s *Service) Get(ctx context.Context, ownerID, id uuid.UUID) (Monitor, erro
 	return s.store.GetMonitor(ctx, ownerID, id)
 }
 
-func (s *Service) List(ctx context.Context, ownerID uuid.UUID, after Cursor, limit int) ([]Monitor, error) {
-	return s.store.ListMonitors(ctx, ownerID, after, limit)
+func (s *Service) List(ctx context.Context, ownerID uuid.UUID, after Cursor, filter ListFilter, limit int) ([]Monitor, error) {
+	return s.store.ListMonitors(ctx, ownerID, after, filter, limit)
 }

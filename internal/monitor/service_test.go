@@ -41,7 +41,7 @@ func (f *fakeStore) GetMonitor(_ context.Context, ownerID, id uuid.UUID) (Monito
 	return Monitor{}, ErrMonitorNotFound
 }
 
-func (f *fakeStore) ListMonitors(_ context.Context, ownerID uuid.UUID, _ Cursor, _ int) ([]Monitor, error) {
+func (f *fakeStore) ListMonitors(_ context.Context, ownerID uuid.UUID, _ Cursor, _ ListFilter, _ int) ([]Monitor, error) {
 	return nil, nil
 }
 

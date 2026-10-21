@@ -315,13 +315,13 @@ func TestMonitorRepository(t *testing.T) {
 		if _, err := repo.CreateMonitor(ctx, other, wf(), bigCaps); err != nil {
 			t.Fatalf("other seed: %v", err)
 		}
-		page1, err := repo.ListMonitors(ctx, owner, monitor.Cursor{}, 2)
+		page1, err := repo.ListMonitors(ctx, owner, monitor.Cursor{}, monitor.ListFilter{}, 2)
 		if err != nil || len(page1) != 2 {
 			t.Fatalf("page1: %v len=%d", err, len(page1))
 		}
 		last := page1[len(page1)-1]
 		page2, err := repo.ListMonitors(ctx, owner,
-			monitor.Cursor{CreatedAt: last.CreatedAt, ID: last.ID, Valid: true}, 10)
+			monitor.Cursor{CreatedAt: last.CreatedAt, ID: last.ID, Valid: true}, monitor.ListFilter{}, 10)
 		if err != nil || len(page2) != 1 {
 			t.Fatalf("page2: %v len=%d", err, len(page2))
 		}

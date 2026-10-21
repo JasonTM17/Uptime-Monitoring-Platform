@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -284,28 +285,35 @@ func (r *Repository) GetMonitor(ctx context.Context, ownerID, id uuid.UUID) (Mon
 	return m, nil
 }
 
-// ListMonitors pages the owner's live monitors newest-first. The
-// cursor is exclusive: rows strictly older than (CreatedAt,ID) return.
+// ListMonitors pages the owner's live monitors newest-first under the
+// bounded filter set. The cursor is exclusive: rows strictly older
+// than (CreatedAt,ID) return, matching the monitors_owner_page index
+// scanned backward. Callers pass limit+1 when they need has_more.
 func (r *Repository) ListMonitors(ctx context.Context, ownerID uuid.UUID,
-	after Cursor, limit int) ([]Monitor, error) {
+	after Cursor, filter ListFilter, limit int) ([]Monitor, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
-	var rows pgx.Rows
-	var err error
-	if after.Valid {
-		rows, err = r.pool.Query(ctx,
-			`SELECT `+monitorCols+` FROM uptime.monitors
-			 WHERE user_id=$1 AND deleted_at IS NULL
-			   AND (created_at,id) < ($3,$4)
-			 ORDER BY created_at DESC, id DESC LIMIT $2`,
-			ownerID, limit, after.CreatedAt, after.ID)
-	} else {
-		rows, err = r.pool.Query(ctx,
-			`SELECT `+monitorCols+` FROM uptime.monitors
-			 WHERE user_id=$1 AND deleted_at IS NULL
-			 ORDER BY created_at DESC, id DESC LIMIT $2`,
-			ownerID, limit)
+	args := []any{ownerID, limit}
+	where := `user_id=$1 AND deleted_at IS NULL`
+	if filter.Paused != nil {
+		args = append(args, *filter.Paused)
+		where += fmt.Sprintf(` AND is_paused=$%d`, len(args))
 	}
+	if filter.Health != "" {
+		args = append(args, filter.Health)
+		where += fmt.Sprintf(` AND health=$%d`, len(args))
+	}
+	if filter.Search != "" {
+		args = append(args, "%"+escapeLike(filter.Search)+"%")
+		where += fmt.Sprintf(` AND name ILIKE $%d ESCAPE '\'`, len(args))
+	}
+	if after.Valid {
+		args = append(args, after.CreatedAt, after.ID)
+		where += fmt.Sprintf(` AND (created_at,id) < ($%d,$%d)`, len(args)-1, len(args))
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+monitorCols+` FROM uptime.monitors WHERE `+where+
+			` ORDER BY created_at DESC, id DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -319,6 +327,13 @@ func (r *Repository) ListMonitors(ctx context.Context, ownerID uuid.UUID,
 		out = append(out, m)
 	}
 	return out, mapErr(rows.Err())
+}
+
+// escapeLike neutralizes ILIKE metacharacters so a search term can
+// never widen into a pattern the owner didn't type.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // lockedMonitor fetches the monitor FOR UPDATE inside a caller's

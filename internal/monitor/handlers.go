@@ -69,6 +69,7 @@ func (h *Handler) Mux() *http.ServeMux {
 	// pattern would be a subtree that swallows /monitors/{id} traffic.
 	for _, path := range []string{"/monitors", "/monitors/{$}"} {
 		mux.HandleFunc("POST "+path, guard(h.create))
+		mux.HandleFunc("GET "+path, session(h.list))
 	}
 	mux.HandleFunc("GET /monitors/{id}", session(h.get))
 	mux.HandleFunc("PATCH /monitors/{id}", guard(h.patch))
@@ -153,6 +154,9 @@ func (h *Handler) writeMonitorError(w http.ResponseWriter, r *http.Request, err 
 	case errors.As(err, &fe):
 		httpserver.WriteErrorFields(w, r, http.StatusUnprocessableEntity,
 			httpserver.ErrValidation, "validation failed", fe.Fields)
+	case errors.Is(err, ErrCursor):
+		httpserver.WriteError(w, r, http.StatusBadRequest,
+			httpserver.ErrBadRequest, "invalid cursor")
 	case errors.Is(err, ErrMonitorNotFound):
 		httpserver.WriteError(w, r, http.StatusNotFound,
 			httpserver.ErrNotFound, "monitor not found")
@@ -220,6 +224,42 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/monitors/"+m.ID.String())
 	httpserver.WriteJSON(w, r, http.StatusCreated, toDTO(m))
+}
+
+// listPage is the collection envelope: items plus the keyset resume
+// token. next_cursor is null when has_more is false.
+type listPage struct {
+	Items      []monitorDTO `json:"items"`
+	HasMore    bool         `json:"has_more"`
+	NextCursor *string      `json:"next_cursor"`
+}
+
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	p := owner(r)
+	pr, err := ParsePageRequest(r.URL.Query())
+	if err != nil {
+		h.writeMonitorError(w, r, err)
+		return
+	}
+	// limit+1 distinguishes "exactly a page left" from "more pages".
+	rows, err := h.svc.List(r.Context(), p.User.ID, pr.After, pr.Filter, pr.Limit+1)
+	if err != nil {
+		h.writeMonitorError(w, r, err)
+		return
+	}
+	page := listPage{Items: []monitorDTO{}}
+	if len(rows) > pr.Limit {
+		page.HasMore = true
+		rows = rows[:pr.Limit]
+	}
+	for _, m := range rows {
+		page.Items = append(page.Items, toDTO(m))
+	}
+	if page.HasMore {
+		nc := EncodeCursor(rows[len(rows)-1], pr.Filter)
+		page.NextCursor = &nc
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, page)
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
