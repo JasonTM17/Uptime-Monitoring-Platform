@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import type { components } from "../../lib/api/schema";
 import { onSessionEvent } from "../../lib/api/sessionEvents";
 import {
@@ -42,7 +42,6 @@ const Ctx = createContext<SessionContextValue | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const location = useLocation();
   const [expiredNotice, setExpiredNotice] = useState(false);
   // After logout the server cookie may still be valid (logout request
   // failed); suppress /me-driven re-auth until a fresh login or reload.
@@ -136,7 +135,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       } catch {
         /* surfaced as "signed out locally" below */
       }
-      navigate("/login", { replace: true, state: { from: location.pathname } });
+      // No from-state: a deliberate sign-out must not hand the previous
+      // identity's last page to whoever logs in next. (Expiry redirects
+      // still carry it via RequireAuth — returning after re-auth is the
+      // desired behavior there.)
+      navigate("/login", { replace: true });
     },
   };
 

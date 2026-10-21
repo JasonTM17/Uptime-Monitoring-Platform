@@ -28,7 +28,6 @@ export function AdminActionDialog({ action, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [reauth, setReauth] = useState(false);
   const idemRef = useRef("");
-  const reasonRef = useRef("");
 
   useEffect(() => {
     if (action) {
@@ -37,7 +36,6 @@ export function AdminActionDialog({ action, onClose }: Props) {
       setBusy(false);
       setReauth(false);
       idemRef.current = crypto.randomUUID();
-      reasonRef.current = "";
     }
   }, [action]);
 
@@ -57,7 +55,6 @@ export function AdminActionDialog({ action, onClose }: Props) {
     if (busy || !r) return;
     setBusy(true);
     setError(null);
-    reasonRef.current = r;
     try {
       const result = await action.run(r, idemRef.current);
       action.onDone(result);

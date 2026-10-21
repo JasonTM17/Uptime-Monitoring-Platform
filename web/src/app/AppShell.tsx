@@ -9,7 +9,7 @@ interface NavItem {
 
 const ownNav: NavItem[] = [
   { to: "/", label: "Dashboard", end: true },
-  { to: "/monitors", label: "Monitors" },
+  { to: "/monitors", label: "New monitor" },
   { to: "/incidents", label: "Incidents" },
   { to: "/channels", label: "Channels" },
   { to: "/settings", label: "Settings" },
