@@ -22,6 +22,12 @@ func testCfg() config.AuthConfig {
 		ArgonSaltLen:     16,
 		ArgonKeyLen:      32,
 		HashWorkers:      2,
+		// Session/limiter fields needed by Service.
+		SessionAbsoluteExpiry:      7 * 24 * time.Hour,
+		SessionIdleExpiry:          24 * time.Hour,
+		LoginIPAttemptsPerMin:      5,
+		LoginAccountAttemptsPer15M: 5,
+		LimiterMaxKeys:             1000,
 	}
 }
 

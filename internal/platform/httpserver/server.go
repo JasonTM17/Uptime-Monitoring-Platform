@@ -28,12 +28,25 @@ type Server struct {
 	server *http.Server
 }
 
-// New builds a Server. ready may be nil (see ReadyProbe).
-func New(cfg config.Config, log *slog.Logger, ready ReadyProbe) *Server {
+// Mount attaches a sub-handler under a mux subtree pattern such as
+// "/auth/". Domain packages register their routes inside their own
+// mux; the server only mounts the subtree — the router seam stays
+// single-source inside the domain package.
+type Mount struct {
+	Pattern string
+	Handler http.Handler
+}
+
+// New builds a Server. ready may be nil (see ReadyProbe). mounts are
+// registered before the catch-all 404.
+func New(cfg config.Config, log *slog.Logger, ready ReadyProbe, mounts ...Mount) *Server {
 	s := &Server{cfg: cfg, log: log, ready: ready}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.handleLive)
 	mux.HandleFunc("GET /health/ready", s.handleReady)
+	for _, m := range mounts {
+		mux.Handle(m.Pattern, m.Handler)
+	}
 	// No-method twins make wrong-method requests return the JSON envelope
 	// with Allow instead of the mux's plaintext default.
 	mux.HandleFunc("/health/live", methodNotAllowed)

@@ -19,6 +19,7 @@ type HandlerConfig struct {
 	MaxJSONBody    int64
 	TrustedProxies []netip.Prefix // empty = trust no proxy (default)
 	CookieSecure   bool           // hosted HTTPS only; local stays false
+	CSRF           *CSRFManager   // required in production wiring
 }
 
 // Handler exposes auth use cases over HTTP. Mux() is the router seam:
@@ -30,20 +31,53 @@ type Handler struct {
 	maxBody int64
 	trusted []netip.Prefix
 	secure  bool
+	csrf    *CSRFManager
 }
 
 func NewHandler(svc *Service, cfg HandlerConfig) *Handler {
 	return &Handler{svc: svc, maxBody: cfg.MaxJSONBody,
-		trusted: cfg.TrustedProxies, secure: cfg.CookieSecure}
+		trusted: cfg.TrustedProxies, secure: cfg.CookieSecure, csrf: cfg.CSRF}
 }
 
 // Mux returns the auth route table. Every auth route lives here so the
-// registration seam stays single-source for route/method parity.
+// registration seam stays single-source for route/method parity. When a
+// CSRF manager is wired, every mutation is wrapped in the pre-auth
+// challenge check — this is the gate that lets the mux go public.
 func (h *Handler) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /auth/csrf", h.csrfChallenge)
+	if h.csrf != nil {
+		mux.HandleFunc("POST /auth/register", h.csrf.RequireCSRF(h.register))
+		mux.HandleFunc("POST /auth/login", h.csrf.RequireCSRF(h.login))
+		return mux
+	}
 	mux.HandleFunc("POST /auth/register", h.register)
 	mux.HandleFunc("POST /auth/login", h.login)
 	return mux
+}
+
+// csrfChallenge issues a fresh signed challenge: readable cookie plus
+// the token in the body. No session is required — this is the pre-auth
+// login-CSRF defense.
+func (h *Handler) csrfChallenge(w http.ResponseWriter, r *http.Request) {
+	if h.csrf == nil {
+		httpserver.WriteError(w, r, http.StatusNotFound,
+			httpserver.ErrNotFound, "route not found")
+		return
+	}
+	token, err := h.csrf.Issue(w)
+	if err != nil {
+		httpserver.WriteError(w, r, http.StatusInternalServerError,
+			httpserver.ErrInternal, "internal error")
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string]string{"csrf_token": token})
+}
+
+// writeCSRFError renders the uniform 403 rejection.
+func writeCSRFError(w http.ResponseWriter, r *http.Request) {
+	httpserver.WriteError(w, r, http.StatusForbidden,
+		httpserver.ErrCSRF, "csrf check failed")
 }
 
 // sessionCookie serializes the bearer token for the browser. Plaintext

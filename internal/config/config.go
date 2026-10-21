@@ -8,8 +8,10 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -51,6 +53,10 @@ type HTTPConfig struct {
 	// TrustedProxies lists CIDRs whose forwarded headers are honored.
 	// An absent or empty list means trust nothing forwarded.
 	TrustedProxies []netip.Prefix
+	// TrustedOrigins lists the exact origins (scheme://host[:port])
+	// allowed to submit cookie-bearing mutations. Exact match only —
+	// no subdomains, no wildcards.
+	TrustedOrigins []string
 }
 
 // DatabaseConfig holds DSNs and pool bounds. URLs are secrets: required,
@@ -113,6 +119,11 @@ type AuthConfig struct {
 	LoginIPAttemptsPerMin      int
 	LoginAccountAttemptsPer15M int
 	LimiterMaxKeys             int
+	// CSRF: signing key for the double-submit challenge. Optional env;
+	// an ephemeral random key is generated when unset (tokens die with
+	// the process — acceptable for local single-instance).
+	CSRFSigningKey []byte
+	CSRFTokenTTL   time.Duration
 }
 
 // NotifyConfig gates notification delivery. The keyring contract is
@@ -180,6 +191,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	if raw, ok := lookup("TRUSTED_PROXIES"); ok {
 		cfg.HTTP.TrustedProxies = parseProxies(raw, errs)
 	}
+	if raw, ok := lookup("TRUSTED_ORIGINS"); ok {
+		cfg.HTTP.TrustedOrigins = parseCSV(raw)
+	}
 
 	envDuration(lookup, errs, "DB_CONN_TIMEOUT", &cfg.Database.ConnTimeout)
 	envInt32(lookup, errs, "DB_MAX_CONNS", &cfg.Database.MaxConns)
@@ -197,6 +211,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envInt(lookup, errs, "LOGIN_IP_ATTEMPTS_PER_MIN", &cfg.Auth.LoginIPAttemptsPerMin)
 	envInt(lookup, errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", &cfg.Auth.LoginAccountAttemptsPer15M)
 	envInt(lookup, errs, "AUTH_LIMITER_MAX_KEYS", &cfg.Auth.LimiterMaxKeys)
+	if raw, ok := lookup("CSRF_SIGNING_KEY"); ok && raw != "" {
+		cfg.Auth.CSRFSigningKey = []byte(raw)
+	}
+	envDuration(lookup, errs, "CSRF_TOKEN_TTL", &cfg.Auth.CSRFTokenTTL)
 
 	envInt(lookup, errs, "ENGINE_WORKERS", &cfg.Engine.Workers)
 	envInt(lookup, errs, "ENGINE_QUEUE_SIZE", &cfg.Engine.QueueSize)
@@ -231,6 +249,14 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	validate(&cfg, errs)
 	if len(errs.problems) > 0 {
 		return Config{}, errs
+	}
+	// Ephemeral CSRF key when none configured: tokens die with the
+	// process (documented local single-instance semantics).
+	if len(cfg.Auth.CSRFSigningKey) == 0 {
+		cfg.Auth.CSRFSigningKey = make([]byte, 32)
+		if _, err := rand.Read(cfg.Auth.CSRFSigningKey); err != nil {
+			return Config{}, fmt.Errorf("CSRF_SIGNING_KEY: could not generate ephemeral key")
+		}
 	}
 	return cfg, nil
 }
@@ -338,7 +364,18 @@ func defaultAuthConfig() AuthConfig {
 		LoginIPAttemptsPerMin:      5,
 		LoginAccountAttemptsPer15M: 5,
 		LimiterMaxKeys:             10000,
+		CSRFTokenTTL:               15 * time.Minute,
 	}
+}
+
+func parseCSV(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func validate(cfg *Config, errs *LoadError) {
@@ -415,6 +452,34 @@ func validate(cfg *Config, errs *LoadError) {
 	bound(errs, "LOGIN_IP_ATTEMPTS_PER_MIN", cfg.Auth.LoginIPAttemptsPerMin, 1, 1000)
 	bound(errs, "LOGIN_ACCOUNT_ATTEMPTS_PER_15M", cfg.Auth.LoginAccountAttemptsPer15M, 1, 1000)
 	bound(errs, "AUTH_LIMITER_MAX_KEYS", cfg.Auth.LimiterMaxKeys, 100, 1000000)
+	// CSRF token TTL bounded; key optional (ephemeral when unset).
+	if cfg.Auth.CSRFTokenTTL < time.Minute || cfg.Auth.CSRFTokenTTL > 2*time.Hour {
+		errs.add("CSRF_TOKEN_TTL", "must be 1m..2h")
+	}
+	if n := len(cfg.Auth.CSRFSigningKey); n > 0 && n < 16 {
+		errs.add("CSRF_SIGNING_KEY", "must be >= 16 bytes when set")
+	}
+	// Trusted origins: hosted REQUIRES an explicit list; local falls
+	// back to loopback origins on the configured port. Every origin
+	// must be an exact scheme://host[:port] with no path.
+	if cfg.Profile == ProfileHosted && len(cfg.HTTP.TrustedOrigins) == 0 {
+		errs.add("TRUSTED_ORIGINS", "hosted profile requires at least one exact origin")
+	}
+	for _, o := range cfg.HTTP.TrustedOrigins {
+		u, perr := url.Parse(o)
+		if perr != nil || (u.Scheme != "http" && u.Scheme != "https") ||
+			u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			errs.add("TRUSTED_ORIGINS", "entries must be exact scheme://host[:port] origins")
+			break
+		}
+	}
+	if len(cfg.HTTP.TrustedOrigins) == 0 && cfg.Profile == ProfileLocal {
+		port := fmt.Sprint(cfg.HTTP.Port)
+		cfg.HTTP.TrustedOrigins = []string{
+			"http://127.0.0.1:" + port,
+			"http://localhost:" + port,
+		}
+	}
 
 	if cfg.Alloc.RetainedMonitorsOwner > cfg.Alloc.RetainedMonitorsGlobal {
 		errs.add("RETAINED_MONITORS_OWNER_LIMIT", "must be <= RETAINED_MONITORS_GLOBAL_LIMIT")

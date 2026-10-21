@@ -58,11 +58,32 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:      "hosted profile selects scaled table",
-			overrides: map[string]string{"APP_ENV": "hosted"},
+			name: "hosted profile selects scaled table",
+			overrides: map[string]string{"APP_ENV": "hosted",
+				"TRUSTED_ORIGINS": "https://app.example.com"},
 			check: func(t *testing.T, c Config) {
 				if c.Engine.GlobalMonitorLimit != 10 || c.Admission.GlobalPer60s != 10 {
 					t.Fatalf("hosted caps = %d/%d", c.Engine.GlobalMonitorLimit, c.Admission.GlobalPer60s)
+				}
+			},
+		},
+		{
+			name: "local profile derives loopback origins from port",
+			check: func(t *testing.T, c Config) {
+				want := map[string]bool{"http://127.0.0.1:8080": true, "http://localhost:8080": true}
+				for _, o := range c.HTTP.TrustedOrigins {
+					delete(want, o)
+				}
+				if len(want) != 0 {
+					t.Fatalf("origins %v missing %v", c.HTTP.TrustedOrigins, want)
+				}
+			},
+		},
+		{
+			name: "ephemeral CSRF key generated when unset",
+			check: func(t *testing.T, c Config) {
+				if len(c.Auth.CSRFSigningKey) != 32 {
+					t.Fatalf("ephemeral key len %d", len(c.Auth.CSRFSigningKey))
 				}
 			},
 		},
@@ -116,6 +137,10 @@ func TestValidate(t *testing.T) {
 		{"notifications gated until C44", map[string]string{"NOTIFICATIONS_ENABLED": "true"}, "NOTIFICATIONS_ENABLED"},
 		{"non-integer rejected", map[string]string{"ENGINE_WORKERS": "many"}, "ENGINE_WORKERS"},
 		{"port zero rejected", map[string]string{"HTTP_PORT": "0"}, "HTTP_PORT"},
+		{"hosted without origins fails closed", map[string]string{"APP_ENV": "hosted"}, "TRUSTED_ORIGINS"},
+		{"origin with path rejected", map[string]string{"TRUSTED_ORIGINS": "http://x.co/p"}, "TRUSTED_ORIGINS"},
+		{"short CSRF key rejected", map[string]string{"CSRF_SIGNING_KEY": "short"}, "CSRF_SIGNING_KEY"},
+		{"idle expiry above absolute rejected", map[string]string{"SESSION_IDLE_EXPIRY": "200h"}, "SESSION_IDLE_EXPIRY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

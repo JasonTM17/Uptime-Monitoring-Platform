@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
@@ -40,6 +41,23 @@ func run() error {
 	}
 	defer pool.Close()
 
-	srv := httpserver.New(cfg, log, database.Ping(pool))
+	// Identity seam: repository -> bounded KDF -> service -> handler.
+	// The auth mux is public now that the CSRF gate (C15) wraps every
+	// mutation; cookie Secure follows the deployment profile.
+	repo := auth.NewRepository(pool, cfg.Database.QueryTimeout)
+	hasher := auth.NewHasher(cfg.Auth)
+	svc := auth.NewService(repo, hasher, cfg.Auth)
+	secure := cfg.Profile == config.ProfileHosted
+	csrfMgr := auth.NewCSRFManager(cfg.Auth.CSRFSigningKey,
+		cfg.Auth.CSRFTokenTTL, secure, cfg.HTTP.TrustedOrigins)
+	authHandler := auth.NewHandler(svc, auth.HandlerConfig{
+		MaxJSONBody:    cfg.HTTP.MaxJSONBodyBytes,
+		TrustedProxies: cfg.HTTP.TrustedProxies,
+		CookieSecure:   secure,
+		CSRF:           csrfMgr,
+	})
+
+	srv := httpserver.New(cfg, log, database.Ping(pool),
+		httpserver.Mount{Pattern: "/auth/", Handler: authHandler.Mux()})
 	return srv.Run(ctx)
 }
