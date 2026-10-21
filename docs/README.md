@@ -17,6 +17,9 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
   Compose profiles, migration job, safe teardown rules.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
+- [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
+  reservation → attempt → atomic finalize pipeline, failure-boundary
+  semantics và fencing invariants.
 
 ## Private planning material
 
