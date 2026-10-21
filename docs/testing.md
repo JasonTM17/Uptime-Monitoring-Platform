@@ -14,6 +14,30 @@ node scripts/check-staged-secrets.mjs --self-test
 Budget: the whole gate should stay under ~10 minutes excluding cold image
 pulls, which are recorded separately.
 
+## Integration tests (real PostgreSQL)
+
+DB-backed tests carry `//go:build integration` and REQUIRE
+`TEST_DATABASE_URL` pointing at the **disposable** `postgres-test`
+database (port 54330) — never the local data DB:
+
+```sh
+docker compose --profile db up -d postgres-test      # if not running
+docker compose --profile migrate run --rm migrate-test up   # apply schema
+TEST_DATABASE_URL="postgres://uptime_test:<pw>@127.0.0.1:54330/uptime_test?sslmode=disable" \
+  go test -count=1 -tags=integration ./internal/auth/
+```
+
+Behavioral coverage includes: migration roundtrip, repository error
+mapping, concurrent canonical-email registration (one account), session
+create/lookup/revoke with SHA-256-only storage, owner-scoped inventory
+(foreign → 404-equivalent), and the full HTTP auth flow
+(csrf → register → login → me → sessions → logout) through a real
+`httptest` server. Fixture rows use unique emails and are deleted by
+the test — no blanket truncate of unrelated rows.
+
+CI runs the same suite in the `go-integration` job (postgres:17.11
+service + pinned `migrate/migrate:v4.20.1` schema step).
+
 ## What each check proves
 
 | Check | Proves | Does NOT prove |
@@ -35,9 +59,9 @@ claimable with a run receipt on a real commit SHA.** Live remote CI requires
 owner-authorized public-history preparation first; private planning material
 is excluded from cache/artifacts/logs by design.
 
-Integration (`postgres-test` + `go-test` profiles) and `-race` jobs are
-enabled in the phase that owns them; race coverage belongs to the Linux
-container job, not the Windows local gate.
+The `go-integration` job is enabled (postgres service + migrate step);
+`-race` coverage belongs to the Linux container job, not the Windows
+local gate.
 
 ## Test style
 
