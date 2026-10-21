@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -172,10 +174,11 @@ func TestSafeSummary(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	sum := c.Summary()
-	rendered := strings.Join([]string{
-		sum.Profile, sum.Listen, sum.HTTPTimeouts, sum.CheckInterval, sum.TargetTimeout,
-	}, " ")
-	if strings.Contains(rendered, sentinel) {
+	raw, err := json.Marshal(sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(sentinel)) {
 		t.Fatal("summary leaked a secret value")
 	}
 	if !sum.DatabaseConfigured {

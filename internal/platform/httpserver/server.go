@@ -34,9 +34,16 @@ func New(cfg config.Config, log *slog.Logger, ready ReadyProbe) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.handleLive)
 	mux.HandleFunc("GET /health/ready", s.handleReady)
+	// No-method twins make wrong-method requests return the JSON envelope
+	// with Allow instead of the mux's plaintext default.
+	mux.HandleFunc("/health/live", methodNotAllowed)
+	mux.HandleFunc("/health/ready", methodNotAllowed)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, http.StatusNotFound, ErrNotFound, "route not found")
+	})
 	handler := RequestID(cfg.HTTP.RequestIDMaxLen)(
-		Recover(log)(
-			AccessLog(log)(
+		AccessLog(log)(
+			Recover(log)(
 				NoStore(mux))))
 	s.server = &http.Server{
 		Handler:           handler,
@@ -101,6 +108,13 @@ func (s *Server) handleLive(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// methodNotAllowed returns the JSON envelope with Allow, replacing the
+// mux's plaintext 405 for registered paths.
+func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", http.MethodGet)
+	WriteError(w, r, http.StatusMethodNotAllowed, ErrMethod, "method not allowed")
 }
 
 // handleReady reports dependency readiness through the injected probe.

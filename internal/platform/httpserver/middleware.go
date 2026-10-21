@@ -60,12 +60,27 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 func (w *statusWriter) Write(b []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += n
 	return n, err
+}
+
+func (w *statusWriter) code() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+// Unwrap exposes the underlying writer so middleware below can still
+// reach Flusher/Hijacker implementations for future streaming routes.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Flush forwards to the underlying writer when it supports flushing.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // AccessLog emits one line per request with the route PATTERN (never the
@@ -86,7 +101,7 @@ func AccessLog(log *slog.Logger) func(http.Handler) http.Handler {
 				"request_id", RequestIDFromContext(r.Context()),
 				"method", r.Method,
 				"route", route,
-				"status", sw.status,
+				"status", sw.code(),
 				"bytes", sw.bytes,
 				"duration_ms", time.Since(start).Milliseconds(),
 			)

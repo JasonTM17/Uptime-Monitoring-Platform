@@ -46,8 +46,10 @@ docker compose --profile test run --rm go-test      # Linux go test -race ./...
 docker compose --profile test down                  # stop + destroy tmpfs data
 ```
 
-`go-test` runs the suite inside Linux (real `-race` coverage); the source
-tree mounts read-only and module/build caches use named volumes.
+`go-test` runs the suite inside Linux (real `-race` coverage); only the
+source dirs (`cmd`, `internal`, `go.mod`) mount read-only — `.env` and other
+local secrets never enter the test container — and module/build caches use
+named volumes.
 
 ## Rules that keep local data safe
 

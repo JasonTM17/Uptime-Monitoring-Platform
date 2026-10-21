@@ -22,6 +22,7 @@
 # Secrets and local environments. Examples remain versionable.
 .env
 .env.*
+*.env
 !.env.example
 !.env.*.example
 !.env.sample

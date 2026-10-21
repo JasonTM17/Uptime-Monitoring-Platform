@@ -7,7 +7,7 @@ go vet ./...
 go test -count=1 ./...
 go build ./cmd/api
 docker compose config --quiet
-node scripts/check-staged-secrets.mjs          # scans staged diff (run after git add)
+node scripts/check-staged-secrets.mjs          # scans staged blobs; also wired into .git/hooks/pre-commit
 node scripts/check-staged-secrets.mjs --self-test
 ```
 
@@ -23,7 +23,7 @@ pulls, which are recorded separately.
 | `go build` | compiles under pinned toolchain | it runs correctly |
 | `docker compose config --quiet` | compose syntax + env interpolation | containers are healthy |
 | `compose ps` healthy | readiness probe (`pg_isready`) passes | migration applied / app works |
-| secret scanner | staged additions match no secret pattern + no sensitive filenames | history is clean, files outside staged set are safe |
+| secret scanner | staged BLOBS (`git show :path`) match no secret pattern + no sensitive filenames; blocks commits via pre-commit hook | history is clean, unstaged content, binary blobs, and entropy-based secrets it has no rule for |
 | `--race` (Linux `go-test` profile) | data-race absence under Linux | races on Windows host |
 
 ## CI honesty
@@ -46,3 +46,14 @@ container job, not the Windows local gate.
 - A security rule needs a negative case that fails before the fix and passes
   after — the test is the oracle.
 - Never weaken an oracle to make a check pass; record the defect instead.
+
+## Scanner scope notes
+
+The staged-secrets gate reads each staged blob directly (not the diff), so
+diff-prefix, quoting, attribute, and context-line tricks cannot bypass it.
+It refuses sensitive filenames, scans example-suffixed files for real
+secrets, and skips placeholder-shaped values (`${VAR}`, `replace-me`,
+`<yours>`). Known residual limits, by design: unstaged file content, commit
+history, binary blobs, and secrets that match no rule (high-entropy values
+without recognizable shape) — review those at publication gates, not per
+commit.

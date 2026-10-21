@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 )
 
@@ -57,7 +58,8 @@ func WriteError(w http.ResponseWriter, r *http.Request, status int, code ErrCode
 // silently-accepted body.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) *APIError {
 	ct := r.Header.Get("Content-Type")
-	if ct != "application/json" {
+	mt, _, mtErr := mime.ParseMediaType(ct)
+	if mtErr != nil || mt != "application/json" {
 		return &APIError{http.StatusUnsupportedMediaType, ErrUnsupported, "content type must be application/json"}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)

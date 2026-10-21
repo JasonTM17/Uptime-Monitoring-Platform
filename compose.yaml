@@ -55,7 +55,7 @@ services:
       - ./scripts/migrate-entrypoint.sh:/scripts/migrate-entrypoint.sh:ro
     entrypoint: ["sh", "/scripts/migrate-entrypoint.sh"]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:?set in .env}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:?set in .env}?sslmode=disable
       MIGRATE_TARGET: local
       MIGRATE_ALLOW_DESTRUCTIVE: "false"
     networks: [local]
@@ -71,7 +71,7 @@ services:
       - ./scripts/migrate-entrypoint.sh:/scripts/migrate-entrypoint.sh:ro
     entrypoint: ["sh", "/scripts/migrate-entrypoint.sh"]
     environment:
-      DATABASE_URL: postgres://${TEST_POSTGRES_USER}:${TEST_POSTGRES_PASSWORD}@postgres-test:5432/${TEST_POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgres://${TEST_POSTGRES_USER:?set in .env}:${TEST_POSTGRES_PASSWORD:?set in .env}@postgres-test:5432/${TEST_POSTGRES_DB:?set in .env}?sslmode=disable
       MIGRATE_TARGET: test
       MIGRATE_ALLOW_DESTRUCTIVE: "false"
     networks: [test]
@@ -81,7 +81,11 @@ services:
     profiles: ["test"]
     working_dir: /src
     volumes:
-      - .:/src:ro
+      # Source dirs only — never the whole repo, which would carry .env
+      # and other local secrets into the test container.
+      - ./cmd:/src/cmd:ro
+      - ./internal:/src/internal:ro
+      - ./go.mod:/src/go.mod:ro
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
     depends_on:

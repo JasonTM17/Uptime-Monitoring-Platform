@@ -13,18 +13,18 @@ set -eu
 ACTION="${1:-up}"
 
 case "$ACTION" in
-  up|version|goto|force)
+  up|version)
     ;;
-  down|drop)
+  *)
+    # Anything that can move the schema backwards, sideways, or rewrite
+    # history (down, drop, goto, force, ...) is destructive: allowed only
+    # against the disposable test database with an explicit opt-in.
     if [ "$MIGRATE_TARGET" != "test" ] || [ "$MIGRATE_ALLOW_DESTRUCTIVE" != "true" ]; then
       echo "refusing destructive migration '$ACTION' (target=$MIGRATE_TARGET destructive=$MIGRATE_ALLOW_DESTRUCTIVE)" >&2
       exit 2
     fi
     ;;
-  *)
-    echo "unknown migration action: $ACTION" >&2
-    exit 2
-    ;;
 esac
 
-exec migrate -path /migrations -database "$DATABASE_URL" "$ACTION" "${2:-}"
+[ "$#" -gt 0 ] && shift
+exec migrate -path /migrations -database "$DATABASE_URL" "$ACTION" "$@"
