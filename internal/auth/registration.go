@@ -75,9 +75,8 @@ type Service struct {
 	acctLimiter *attemptLimiter
 	regLimiter  *attemptLimiter
 	now         func() time.Time
-	dummyOnce   sync.Once
+	dummyMu     sync.Mutex
 	dummy       string
-	dummyErr    error
 }
 
 func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Service {
@@ -100,7 +99,7 @@ func NewService(store Store, hasher PasswordHasher, cfg config.AuthConfig) *Serv
 // attacker can park the (bounded) Argon2 workers and starve logins.
 // It deliberately shares no bucket with the login limiter.
 func (s *Service) CheckRegisterBudget(clientIP string) error {
-	if ok, wait := s.regLimiter.allow("regip|" + clientIP); !ok {
+	if ok, wait := s.regLimiter.allow(loginKey("regip", clientIP)); !ok {
 		return &RateLimitedError{RetryAfter: wait}
 	}
 	return nil

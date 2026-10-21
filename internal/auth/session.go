@@ -90,6 +90,11 @@ type SessionStore interface {
 	ListSessionsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Session, error)
 	RevokeSessionForUser(ctx context.Context, userID, sessionID uuid.UUID) error
 	WithUserLock(ctx context.Context, userID uuid.UUID, fn func(tx pgx.Tx, u User) error) error
+	// FindSessionForUpdate re-reads a session row inside an existing
+	// transaction (FOR UPDATE) — WithActorLock uses it so a revoke
+	// landing between authenticate and commit cannot slip a mutation
+	// through the lock.
+	FindSessionForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Session, error)
 }
 
 // CreateSession issues a new session for userID. The repository call

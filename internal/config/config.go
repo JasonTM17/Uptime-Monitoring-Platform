@@ -437,9 +437,12 @@ func validate(cfg *Config, errs *LoadError) {
 	bound(errs, "RETAINED_CHANNELS_GLOBAL_LIMIT", cfg.Alloc.RetainedChannelsGlobal, 1, 10000)
 
 	// Argon2id: never weaker than the OWASP floor (19MiB/t2/p1), never
-	// so large that a config typo becomes a memory bomb.
-	if cfg.Auth.ArgonMemoryKiB < 19*1024 || cfg.Auth.ArgonMemoryKiB > 1024*1024 {
-		errs.add("ARGON2_MEMORY_KIB", "must be 19456..1048576 KiB")
+	// so large that a config typo becomes a memory bomb. The 256 MiB
+	// ceiling MUST match the verify-side stored-hash ceiling in
+	// internal/auth/password.go — otherwise config accepts a cost the
+	// verifier later refuses (every login 500s).
+	if cfg.Auth.ArgonMemoryKiB < 19*1024 || cfg.Auth.ArgonMemoryKiB > 256*1024 {
+		errs.add("ARGON2_MEMORY_KIB", "must be 19456..262144 KiB")
 	}
 	boundUint32(errs, "ARGON2_TIME", cfg.Auth.ArgonTime, 2, 16)
 	if cfg.Auth.ArgonParallelism < 1 || cfg.Auth.ArgonParallelism > 8 {

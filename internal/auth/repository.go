@@ -284,6 +284,18 @@ func (r *Repository) WithUserLock(ctx context.Context, userID uuid.UUID,
 	return mapErr(tx.Commit(ctx))
 }
 
+// FindSessionForUpdate re-reads the session row FOR UPDATE inside a
+// caller-owned transaction. Lock order stays users → sessions, matching
+// CreateSession — callers must not hold a session lock before this.
+func (r *Repository) FindSessionForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Session, error) {
+	s, err := scanSession(tx.QueryRow(ctx,
+		`SELECT `+sessionCols+` FROM uptime.sessions WHERE id=$1 FOR UPDATE`, id))
+	if err != nil {
+		return Session{}, mapErr(err)
+	}
+	return s, nil
+}
+
 // RevokeSession stamps revoked_at once (idempotent for callers: a
 // missing or already-revoked row is still a successful no-op only when
 // the row exists).

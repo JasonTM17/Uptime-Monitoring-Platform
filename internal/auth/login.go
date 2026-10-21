@@ -36,15 +36,23 @@ func loginKey(kind, raw string) string {
 }
 
 // dummyHash returns a lazily-generated PHC so unknown-email attempts
-// still execute a real Argon2id verification (uniform KDF path). The
-// Once is per-Service — a global latch would leak state across service
-// instances and pin a transient failure forever.
+// still execute a real Argon2id verification (uniform KDF path). Only
+// SUCCESS is cached: latching a transient failure (e.g. a busy gate on
+// the first-ever attempt) would permanently skip the KDF path and
+// become a measurable timing oracle.
 func (s *Service) dummyHash() (string, error) {
-	s.dummyOnce.Do(func() {
-		s.dummy, s.dummyErr = s.hasher.HashPassword(context.Background(),
-			"dummy-password-for-unknown-users")
-	})
-	return s.dummy, s.dummyErr
+	s.dummyMu.Lock()
+	defer s.dummyMu.Unlock()
+	if s.dummy != "" {
+		return s.dummy, nil
+	}
+	h, err := s.hasher.HashPassword(context.Background(),
+		"dummy-password-for-unknown-users")
+	if err != nil {
+		return "", err // not cached — retry next attempt
+	}
+	s.dummy = h
+	return s.dummy, nil
 }
 
 // Login authenticates email+password under IP and account attempt
@@ -78,9 +86,14 @@ func (s *Service) Login(ctx context.Context, in LoginInput, clientIP string) (Is
 	case err == nil:
 	case errors.Is(err, ErrNotFound):
 		// Unknown email: run the same KDF path against a dummy hash so
-		// the attempt is indistinguishable from a wrong password.
+		// the attempt is indistinguishable from a wrong password —
+		// INCLUDING error shape: a saturated hash gate must yield the
+		// same 429 here as it does on the known-email path below, else
+		// busy-window responses become an account-existence oracle.
 		if dh, derr := s.dummyHash(); derr == nil {
-			_, _ = s.hasher.VerifyPassword(ctx, in.Password, dh)
+			if _, verr := s.hasher.VerifyPassword(ctx, in.Password, dh); verr != nil {
+				return IssuedSession{}, PublicUser{}, verr
+			}
 		}
 		if !acctOK { // no owner exists to release the lock
 			return IssuedSession{}, PublicUser{}, &RateLimitedError{RetryAfter: acctWait}

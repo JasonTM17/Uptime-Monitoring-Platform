@@ -70,19 +70,20 @@ func (h *Handler) Mux() *http.ServeMux {
 		mux.HandleFunc("POST /auth/logout", h.logout)
 		mux.HandleFunc("DELETE /auth/sessions/{id}", h.RequireSession(h.revokeOwnSession))
 	}
-	for _, p := range []string{"/auth/csrf", "/auth/me", "/auth/sessions",
-		"/auth/register", "/auth/login", "/auth/logout", "/auth/sessions/{id}"} {
-		mux.HandleFunc(p, h.methodNotAllowed)
+	for _, p := range []struct{ path, allow string }{
+		{"/auth/csrf", http.MethodGet}, {"/auth/me", http.MethodGet},
+		{"/auth/sessions", http.MethodGet}, {"/auth/register", http.MethodPost},
+		{"/auth/login", http.MethodPost}, {"/auth/logout", http.MethodPost},
+		{"/auth/sessions/{id}", http.MethodDelete},
+	} {
+		mux.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Allow", p.allow)
+			httpserver.WriteError(w, r, http.StatusMethodNotAllowed,
+				httpserver.ErrMethod, "method not allowed")
+		})
 	}
 	mux.HandleFunc("/", h.notFound)
 	return mux
-}
-
-// methodNotAllowed renders the envelope twin for a path whose concrete
-// method pattern exists (wrong method → 405 instead of plaintext).
-func (h *Handler) methodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	httpserver.WriteError(w, r, http.StatusMethodNotAllowed,
-		httpserver.ErrMethod, "method not allowed")
 }
 
 func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
@@ -143,8 +144,10 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 				strconv.Itoa(int(rl.RetryAfter.Seconds())+1))
 			httpserver.WriteError(w, r, http.StatusTooManyRequests,
 				httpserver.ErrRateLimited, "too many attempts")
-			return
+		} else {
+			h.internalError(w, r, err)
 		}
+		return // fail closed — never fall through to the KDF path
 	}
 	var in RegisterInput
 	if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {

@@ -87,15 +87,25 @@ func (s *Service) RecheckActor(ctx context.Context, p Principal) (User, error) {
 }
 
 // WithActorLock runs fn under the user-row FOR UPDATE lock AFTER the
-// actor predicate passes, inside the SAME transaction. Callers
-// composing privileged mutations (Phase-03 quota → monitor insert)
-// write through tx so the recheck genuinely fences the commit — a
-// recheck-then-new-tx split would reopen the TOCTOU this closes.
+// actor predicate passes, inside the SAME transaction. The session row
+// is re-read under lock too — user-level fencing alone would miss a
+// per-session revoke (which does not bump security_version) landing
+// between authenticate and commit. Callers composing privileged
+// mutations (Phase-03 quota → monitor insert) write through tx so the
+// recheck genuinely fences the commit — a recheck-then-new-tx split
+// would reopen the TOCTOU this closes.
 func (s *Service) WithActorLock(ctx context.Context, p Principal,
 	fn func(tx pgx.Tx, u User) error) error {
 	return s.store.WithUserLock(ctx, p.User.ID, func(tx pgx.Tx, u User) error {
 		if err := actorPredicate(u, p); err != nil {
 			return err
+		}
+		sess, err := s.store.FindSessionForUpdate(ctx, tx, p.Session.ID)
+		if err != nil {
+			return err
+		}
+		if sess.RevokedAt != nil || !s.now().Before(sess.ExpiresAt) {
+			return ErrInvalidSession
 		}
 		return fn(tx, u)
 	})

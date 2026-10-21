@@ -132,6 +132,16 @@ func (f *fakeSessions) WithUserLock(_ context.Context, userID uuid.UUID, fn func
 	}
 	return fn(nil, u)
 }
+func (f *fakeSessions) FindSessionForUpdate(_ context.Context, _ pgx.Tx, id uuid.UUID) (Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.byHash {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return Session{}, ErrNotFound
+}
 func (f *fakeSessions) touches() int { f.mu.Lock(); defer f.mu.Unlock(); return f.touchN }
 
 func TestSessionToken(t *testing.T) {
