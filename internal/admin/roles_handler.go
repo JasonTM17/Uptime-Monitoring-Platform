@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -71,6 +72,12 @@ func (h *RolesHandler) Mux() *http.ServeMux {
 	mux.HandleFunc("PUT /admin/users/{id}/roles", guard(h.assign))
 	for _, m := range []string{"GET", "POST", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /admin/users/{id}/roles", h.methodNotAllowed("PUT"))
+	}
+	mux.HandleFunc("POST /admin/users/{id}/suspend", guard(h.suspend))
+	mux.HandleFunc("POST /admin/users/{id}/restore", guard(h.restore))
+	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
+		mux.HandleFunc(m+" /admin/users/{id}/suspend", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/users/{id}/restore", h.methodNotAllowed("POST"))
 	}
 	mux.HandleFunc("/admin/", h.notFound)
 	return mux
@@ -192,6 +199,47 @@ func (h *RolesHandler) assign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, res.Status, res.Response)
+}
+
+// accountTransition is the shared suspend/restore transport: parse
+// target, read+decode the bounded body, run the guarded recipe.
+func (h *RolesHandler) accountTransition(
+	fn func(context.Context, Beginner, ActorRef, uuid.UUID,
+		SuspendInput, string, []byte, time.Time) (PrivilegedResult, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, _ := auth.PrincipalFromContext(r.Context())
+		target, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			httpserver.WriteError(w, r, http.StatusBadRequest,
+				httpserver.ErrBadRequest, "invalid user id")
+			return
+		}
+		body, ok := h.readBody(w, r)
+		if !ok {
+			return
+		}
+		var in SuspendInput
+		if apiErr := httpserver.DecodeBodyBytes(body, &in); apiErr != nil {
+			httpserver.WriteError(w, r, apiErr.Status, apiErr.Code, apiErr.Msg)
+			return
+		}
+		res, err := fn(r.Context(), h.conn, actorRef(p), target, in,
+			r.Header.Get("Idempotency-Key"), body, h.now())
+		if err != nil {
+			h.writeErr(w, r, err)
+			return
+		}
+		httpserver.WriteJSON(w, r, res.Status, res.Response)
+	}
+}
+
+func (h *RolesHandler) suspend(w http.ResponseWriter, r *http.Request) {
+	h.accountTransition(SuspendAccount)(w, r)
+}
+
+func (h *RolesHandler) restore(w http.ResponseWriter, r *http.Request) {
+	h.accountTransition(RestoreAccount)(w, r)
 }
 
 // writeErr maps the admin error lattice onto the shared envelope.

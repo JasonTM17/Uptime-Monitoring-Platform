@@ -1096,6 +1096,57 @@ paths:
                 request_id: "req_01H…"
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
+  /admin/users/{id}/suspend:
+    post:
+      tags: [admin]
+      summary: Disable an account — epoch bump, session revoke, segment close, generation fence
+      operationId: suspendAdminUser
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Account disabled (idempotent — repeated suspend returns already:true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Stale expected_version or LAST_SUPERADMIN
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error:
+                  code: LAST_SUPERADMIN
+                  message: the last active superadmin cannot be removed
+                request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/users/{id}/restore:
+    post:
+      tags: [admin]
+      summary: Re-activate a disabled account — sessions and removed grants stay revoked
+      operationId: restoreAdminUser
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Account active (eligible monitors due at first future slot)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
 components:
   parameters:
     IdempotencyKey:
