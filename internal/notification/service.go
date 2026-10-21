@@ -54,6 +54,12 @@ func (s *Service) Get(ctx context.Context, ownerID, id uuid.UUID) (Channel, erro
 	return s.store.GetChannel(ctx, ownerID, id)
 }
 
+// List returns all live channels for the owner. The bound is the
+// configured retained ceiling — live rows can never exceed it, so
+// the list is complete by construction, not arbitrarily truncated.
 func (s *Service) List(ctx context.Context, ownerID uuid.UUID, limit int) ([]Channel, error) {
+	if limit <= 0 || limit > s.caps.RetainedOwner {
+		limit = s.caps.RetainedOwner
+	}
 	return s.store.ListChannels(ctx, ownerID, limit)
 }

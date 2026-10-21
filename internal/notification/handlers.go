@@ -196,7 +196,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	p := owner(r)
-	cs, err := h.svc.List(r.Context(), p.User.ID, 100)
+	cs, err := h.svc.List(r.Context(), p.User.ID, 0)
 	if err != nil {
 		h.writeChannelError(w, r, err)
 		return

@@ -20,8 +20,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -98,10 +100,11 @@ func verify(args []string, stdin *os.File) error {
 	}
 
 	// Destination from STDIN only — never a flag (would land in shell
-	// history and process lists).
-	fmt.Fprint(os.Stderr, "chat ID (stdin, hidden in output): ")
+	// history and process lists). It is echoed on a TTY but is never
+	// printed back by this program — only the mask is.
+	fmt.Fprint(os.Stderr, "chat ID (stdin, not printed back): ")
 	line, err := bufio.NewReader(stdin).ReadString('\n')
-	if err != nil {
+	if err != nil && !(errors.Is(err, io.EOF) && len(line) > 0) {
 		return fmt.Errorf("read destination: %w", err)
 	}
 	dest := strings.TrimSpace(line)
@@ -172,7 +175,7 @@ func decryptCheck(args []string) error {
 		return fmt.Errorf("decrypt failed (wrong key version or corrupt row)")
 	}
 	got := notification.MaskDestination(string(plain))
-	fmt.Printf("ok: mask=%s stored_mask=%v match=%v\n",
+	fmt.Printf("ok: mask=%s stored_mask_match=%v version=%d\n",
 		got, c.DestinationMask != nil && *c.DestinationMask == got, c.Version)
 	return nil
 }

@@ -20,7 +20,7 @@ func TestRevokedSessionFlow(t *testing.T) {
 	svc := auth.NewService(repo, nil, intCfg(), 10)
 	ctx := context.Background()
 
-	u, err := repo.CreateUser(ctx, "rev@example.com", "$argon2id$fixture", "", 10)
+	u, err := repo.CreateUser(ctx, unqEmail("rev"), "$argon2id$fixture", "", 10)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -51,8 +51,8 @@ func TestOwnSessionRoutes(t *testing.T) {
 	svc := auth.NewService(repo, nil, intCfg(), 10)
 	ctx := context.Background()
 
-	owner, _ := repo.CreateUser(ctx, "own2@example.com", "$h", "", 10)
-	other, _ := repo.CreateUser(ctx, "oth2@example.com", "$h", "", 10)
+	owner, _ := repo.CreateUser(ctx, unqEmail("own2"), "$h", "", 10)
+	other, _ := repo.CreateUser(ctx, unqEmail("oth2"), "$h", "", 10)
 	a, _ := svc.CreateSession(ctx, owner.ID, "a")
 	b, _ := svc.CreateSession(ctx, owner.ID, "b")
 	foreign, _ := svc.CreateSession(ctx, other.ID, "f")

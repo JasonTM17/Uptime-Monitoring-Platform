@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -216,6 +217,58 @@ func TestMonitorHandlers(t *testing.T) {
 		rec := f.do("GET", "/monitors/"+uuid.NewString()+"/extra", "")
 		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "NOT_FOUND") {
 			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("bind requires channel_ids presence, empty unbinds", func(t *testing.T) {
+		fs := newFakeStore()
+		svc := NewService(fs, fs, Caps{RetainedOwner: 100, RetainedGlobal: 200})
+		actor := uuid.New()
+		eligible := func(_ context.Context, _ pgx.Tx, _ uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+			ok := map[uuid.UUID]bool{}
+			for _, id := range ids {
+				ok[id] = true
+			}
+			return ok, nil
+		}
+		h := NewHandler(svc, &fakeGate{actor: actor, monLimit: 100},
+			HandlerConfig{MaxJSONBody: 32 << 10, ChannelEligibility: eligible})
+		mux := h.Mux()
+		// Seed through the same store the mux serves — a foreign fixture's
+		// monitor would 404 here.
+		m, err := svc.Create(context.Background(), actor, CreateInput{
+			Name: "bindable", TargetURL: "https://example.com",
+			IntervalSeconds: 60, TimeoutSeconds: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "/monitors/" + m.ID.String() + "/notification-channels"
+		bindAt := func(body string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest("PUT", path, strings.NewReader(body))
+			req.Header.Set("X-Test-Auth", "1")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			return rec
+		}
+		// Absent and null channel_ids are malformed — never a silent unbind.
+		if rec := bindAt(`{"expected_generation":1}`); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("absent channel_ids %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := bindAt(`{"expected_generation":1,"channel_ids":null}`); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("null channel_ids %d %s", rec.Code, rec.Body.String())
+		}
+		// Explicit empty set unbinds and bumps generation exactly once.
+		if rec := bindAt(`{"expected_generation":1,"channel_ids":[]}`); rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), `"generation":2`) {
+			t.Fatalf("empty unbind %d %s", rec.Code, rec.Body.String())
+		}
+		// Duplicates collapse — binding succeeds with the deduped set.
+		cid := uuid.NewString()
+		body := fmt.Sprintf(`{"expected_generation":2,"channel_ids":[%q,%q]}`, cid, cid)
+		rec := bindAt(body)
+		if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), cid) != 1 {
+			t.Fatalf("dup bind %d %s", rec.Code, rec.Body.String())
 		}
 	})
 

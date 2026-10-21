@@ -388,11 +388,14 @@ func (h *Handler) transition(paused bool) http.HandlerFunc {
 }
 
 // bindBody is the PUT contract: full replacement under the
-// generation fence (RT F11). Duplicate ids collapse server-side;
-// an empty set is a legitimate unbind.
+// generation fence (RT F11). Duplicate ids collapse server-side.
+// channel_ids is a pointer: absent/null is a malformed request (422),
+// while an explicit empty list is the legitimate unbind — the
+// difference between "forgot the field" and "remove all bindings"
+// must not silently destroy state.
 type bindBody struct {
-	ExpectedGeneration int64    `json:"expected_generation"`
-	ChannelIDs         []string `json:"channel_ids"`
+	ExpectedGeneration int64     `json:"expected_generation"`
+	ChannelIDs         *[]string `json:"channel_ids"`
 }
 
 func (h *Handler) bindChannels(w http.ResponseWriter, r *http.Request) {
@@ -410,17 +413,22 @@ func (h *Handler) bindChannels(w http.ResponseWriter, r *http.Request) {
 	if in.ExpectedGeneration < 1 {
 		fields["expected_generation"] = "required"
 	}
-	seen := map[uuid.UUID]bool{}
-	ids := make([]uuid.UUID, 0, len(in.ChannelIDs))
-	for _, raw := range in.ChannelIDs {
-		cid, err := uuid.Parse(raw)
-		if err != nil {
-			fields["channel_ids"] = "must be UUIDs"
-			break
-		}
-		if !seen[cid] {
-			seen[cid] = true
-			ids = append(ids, cid)
+	if in.ChannelIDs == nil {
+		fields["channel_ids"] = "required"
+	}
+	var ids []uuid.UUID
+	if in.ChannelIDs != nil {
+		seen := map[uuid.UUID]bool{}
+		for _, raw := range *in.ChannelIDs {
+			cid, err := uuid.Parse(raw)
+			if err != nil {
+				fields["channel_ids"] = "must be UUIDs"
+				break
+			}
+			if !seen[cid] {
+				seen[cid] = true
+				ids = append(ids, cid)
+			}
 		}
 	}
 	if len(fields) > 0 {

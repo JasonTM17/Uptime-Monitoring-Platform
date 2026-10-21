@@ -5,10 +5,12 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -86,7 +88,16 @@ func TestIdentityMigration(t *testing.T) {
 		}
 	})
 
-	uid := "11111111-2222-3333-4444-555555555555"
+	// Per-run unique ids/emails — rolled-back seeds must not collide
+	// with committed leftovers on the disposable DB.
+	uid := uuid.NewString()
+	sfx := fmt.Sprintf("+%d", time.Now().UnixNano())
+	caseE := "case" + sfx + "@example.com"
+	sessE := "sess" + sfx + "@example.com"
+	sess2E := "sess2" + sfx + "@example.com"
+	sess3E := "sess3" + sfx + "@example.com"
+	expE := "exp" + sfx + "@example.com"
+	exp2E := "exp2" + sfx + "@example.com"
 	t.Run("insert user enforces canonical email check", func(t *testing.T) {
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
@@ -100,7 +111,7 @@ func TestIdentityMigration(t *testing.T) {
 	t.Run("valid user defaults to ACTIVE non-elevated", func(t *testing.T) {
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'case@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, caseE)
 			if err != nil {
 				t.Fatalf("insert user: %v", err)
 			}
@@ -117,23 +128,23 @@ func TestIdentityMigration(t *testing.T) {
 	t.Run("duplicate canonical email rejected by unique constraint", func(t *testing.T) {
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'case@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, caseE)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
 			_, err = tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES (gen_random_uuid(),'case@example.com','h')`)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES (gen_random_uuid(),$1,'h')`, caseE)
 			if !isPGError(err, "23505") {
 				t.Fatalf("expected unique_violation, got %v", err)
 			}
 		})
 	})
 
-	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	sid := uuid.NewString()
 	t.Run("session FK restrict and token_hash length", func(t *testing.T) {
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'sess@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, sessE)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
@@ -147,7 +158,7 @@ func TestIdentityMigration(t *testing.T) {
 		})
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'sess2@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, sess2E)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
@@ -161,7 +172,7 @@ func TestIdentityMigration(t *testing.T) {
 		})
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'sess3@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, sess3E)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
@@ -183,7 +194,7 @@ func TestIdentityMigration(t *testing.T) {
 	t.Run("session expiry check and token uniqueness", func(t *testing.T) {
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'exp@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, expE)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
@@ -197,7 +208,7 @@ func TestIdentityMigration(t *testing.T) {
 		})
 		inTx(t, conn, func(tx pgx.Tx) {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,'exp2@example.com','h')`, uid)
+				`INSERT INTO uptime.users (id,email,password_hash) VALUES ($1,$2,'h')`, uid, exp2E)
 			if err != nil {
 				t.Fatalf("seed user: %v", err)
 			}

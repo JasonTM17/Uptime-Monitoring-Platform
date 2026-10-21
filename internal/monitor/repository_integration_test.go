@@ -113,13 +113,24 @@ func TestMonitorRepository(t *testing.T) {
 	})
 
 	t.Run("missing quota budget fails closed", func(t *testing.T) {
-		dropBudget(t, pool)
+		// DELETE + attempt in ONE tx: a parallel package's
+		// EnsureQuotaBudget INSERT blocks on the pending delete and can
+		// only land after rollback — the window can't be raced, and the
+		// row is restored without a reseed.
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM uptime.quota_budgets WHERE id=1`); err != nil {
+			t.Fatalf("drop budget: %v", err)
+		}
 		owner := mkOwner(t, pool, 100)
-		_, err := repo.CreateMonitor(ctx, owner, wf(), bigCaps)
+		_, err = repo.CreateMonitorTx(ctx, tx, owner, 100, wf(), bigCaps)
 		if !errors.Is(err, monitor.ErrBudgetMissing) {
 			t.Fatalf("want ErrBudgetMissing, got %v", err)
 		}
-		seedBudget(t, pool, 1000)
 	})
 
 	t.Run("owner live cap binds and counts paused rows", func(t *testing.T) {

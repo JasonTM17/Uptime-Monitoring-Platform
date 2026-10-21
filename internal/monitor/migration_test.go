@@ -5,7 +5,9 @@ package monitor_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,8 +55,13 @@ func inTx(t *testing.T, conn *pgx.Conn, fn func(tx pgx.Tx)) {
 	fn(tx)
 }
 
+// seedSuffix plus-addresses every fixture email — committed leftovers
+// from earlier runs must not collide with rolled-back seeds.
+var seedSuffix = fmt.Sprintf("+%d", time.Now().UnixNano())
+
 func seedUser(t *testing.T, tx pgx.Tx, email string) string {
 	t.Helper()
+	email = strings.Replace(email, "@", seedSuffix+"@", 1)
 	var id string
 	err := tx.QueryRow(context.Background(),
 		`INSERT INTO uptime.users (id,email,password_hash) VALUES (gen_random_uuid(),$1,'h') RETURNING id`, email).Scan(&id)

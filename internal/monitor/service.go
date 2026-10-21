@@ -168,7 +168,7 @@ func (s *Service) DeleteTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID
 func (s *Service) BindChannelsTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
 	gen int64, channelIDs []uuid.UUID, eligible ChannelEligibility) (Monitor, error) {
 	seen := map[uuid.UUID]bool{}
-	dedup := channelIDs[:0]
+	dedup := make([]uuid.UUID, 0, len(channelIDs))
 	for _, cid := range channelIDs {
 		if !seen[cid] {
 			seen[cid] = true

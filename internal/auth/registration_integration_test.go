@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,12 +28,7 @@ func TestConcurrentRegistration(t *testing.T) {
 	svc := auth.NewService(repo, hasher, intCfg(), 10)
 	ctx := context.Background()
 
-	const email = "race@concurrent.test"
-	// Clean any leftover row from a previous run (disposable db).
-	if conn := connect(t); conn != nil {
-		_, _ = conn.Exec(ctx, "DELETE FROM uptime.users WHERE email=$1", email)
-		_ = conn.Close(ctx)
-	}
+	email := unqEmail("race")
 
 	const racers = 6
 	errs := make([]error, racers)
@@ -45,9 +41,9 @@ func TestConcurrentRegistration(t *testing.T) {
 			defer wg.Done()
 			<-start
 			// Same canonical email, different raw casings.
-			raw := []string{"Race@Concurrent.Test", "race@concurrent.test",
-				"RACE@CONCURRENT.TEST", " race@concurrent.test ",
-				"rAce@Concurrent.test", "RACE@concurrent.test"}[i]
+			raw := []string{strings.ToUpper(email), email,
+				strings.ToUpper(email), " " + email + " ",
+				strings.ToUpper(email[:1]) + email[1:], email}[i]
 			var err error
 			for try := 0; try < 8; try++ {
 				_, err = svc.Register(ctx, auth.RegisterInput{

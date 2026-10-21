@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +16,12 @@ import (
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 )
+
+// unqEmail makes committed fixture emails unique per run — the
+// disposable DB must stay re-runnable without a schema reset.
+func unqEmail(local string) string {
+	return fmt.Sprintf("%s-%d@integ.test", local, time.Now().UnixNano())
+}
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -38,7 +45,8 @@ func TestIdentityRepository(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("create and find round-trip", func(t *testing.T) {
-		u, err := repo.CreateUser(ctx, "rt@example.com", "$argon2id$fixture", "rt", 77)
+		email := unqEmail("rt")
+		u, err := repo.CreateUser(ctx, email, "$argon2id$fixture", "rt", 77)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -50,21 +58,22 @@ func TestIdentityRepository(t *testing.T) {
 		if u.MonitorLimit != 77 {
 			t.Fatalf("monitor_limit = %d, want stamped quota 77 (not DB default)", u.MonitorLimit)
 		}
-		byEmail, err := repo.FindUserByEmail(ctx, "rt@example.com")
+		byEmail, err := repo.FindUserByEmail(ctx, email)
 		if err != nil || byEmail.ID != u.ID {
 			t.Fatalf("find by email: %v %+v", err, byEmail)
 		}
 		byID, err := repo.FindUserByID(ctx, u.ID)
-		if err != nil || byID.Email != "rt@example.com" {
+		if err != nil || byID.Email != email {
 			t.Fatalf("find by id: %v %+v", err, byID)
 		}
 	})
 
 	t.Run("duplicate email maps to ErrDuplicateEmail not 500", func(t *testing.T) {
-		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", "", 10); err != nil {
+		email := unqEmail("dup")
+		if _, err := repo.CreateUser(ctx, email, "h", "", 10); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := repo.CreateUser(ctx, "dup@example.com", "h", "", 10); !errors.Is(err, auth.ErrDuplicateEmail) {
+		if _, err := repo.CreateUser(ctx, email, "h", "", 10); !errors.Is(err, auth.ErrDuplicateEmail) {
 			t.Fatalf("expected ErrDuplicateEmail, got %v", err)
 		}
 	})

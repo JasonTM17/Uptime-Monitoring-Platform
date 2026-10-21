@@ -24,10 +24,6 @@ var (
 	ErrBudgetMissing   = errors.New("quota budget not initialized")
 	ErrActorInactive   = errors.New("owner is not active")
 	ErrUnavailable     = errors.New("channel store unavailable")
-	// ErrIneligibleChannel covers every reason a channel cannot be
-	// bound: foreign-owned, missing, unverified, disabled, or deleted.
-	// The API never says which — existence is not the client's data.
-	ErrIneligibleChannel = errors.New("one or more channels not eligible")
 )
 
 // Channel statuses mirror the CHECK constraint.
