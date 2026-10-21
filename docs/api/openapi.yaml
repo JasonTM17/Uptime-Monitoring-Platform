@@ -87,13 +87,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [csrf_token]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      csrf_token: { type: string }
+                      data:
+                        type: object
+                        required: [csrf_token]
+                        properties:
+                          csrf_token: { type: string }
               example:
                 data: { csrf_token: "9f3d2c1b-example-token" }
 
@@ -119,9 +121,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/User' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '409':
@@ -160,14 +164,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [user, session_expires_at]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      user: { $ref: '#/components/schemas/User' }
-                      session_expires_at: { type: string, format: date-time }
+                      data:
+                        type: object
+                        required: [user, session_expires_at]
+                        properties:
+                          user: { $ref: '#/components/schemas/User' }
+                          session_expires_at: { type: string, format: date-time }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401':
           description: Invalid credentials — unknown, disabled, and wrong password are indistinguishable
@@ -194,13 +200,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [status]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      status: { type: string, enum: [logged_out] }
+                      data:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, enum: [logged_out] }
               example: { data: { status: logged_out } }
         '403': { $ref: '#/components/responses/CSRFRejected' }
 
@@ -215,14 +223,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [user, session_expires_at]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      user: { $ref: '#/components/schemas/User' }
-                      session_expires_at: { type: string, format: date-time }
+                      data:
+                        type: object
+                        required: [user, session_expires_at]
+                        properties:
+                          user: { $ref: '#/components/schemas/User' }
+                          session_expires_at: { type: string, format: date-time }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
   /auth/sessions:
@@ -243,17 +253,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [sessions, page, page_size]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      sessions:
-                        type: array
-                        items: { $ref: '#/components/schemas/SessionDTO' }
-                      page: { type: integer }
-                      page_size: { type: integer }
+                      data:
+                        type: object
+                        required: [sessions, page, page_size]
+                        properties:
+                          sessions:
+                            type: array
+                            items: { $ref: '#/components/schemas/SessionDTO' }
+                          page: { type: integer }
+                          page_size: { type: integer }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
   /auth/sessions/{id}:
@@ -295,13 +307,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [reauthenticated_until]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      reauthenticated_until: { type: string, format: date-time }
+                      data:
+                        type: object
+                        required: [reauthenticated_until]
+                        properties:
+                          reauthenticated_until: { type: string, format: date-time }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '429': { $ref: '#/components/responses/RateLimited' }
@@ -322,13 +336,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [revoked_count]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      revoked_count: { type: integer, minimum: 0 }
+                      data:
+                        type: object
+                        required: [revoked_count]
+                        properties:
+                          revoked_count: { type: integer, minimum: 0 }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403':
           description: CSRF rejected OR recent authentication required
@@ -369,9 +385,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Monitor' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Monitor' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
@@ -434,17 +452,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [items, has_more, next_cursor]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      items:
-                        type: array
-                        items: { $ref: '#/components/schemas/Monitor' }
-                      has_more: { type: boolean }
-                      next_cursor: { type: [string, 'null'] }
+                      data:
+                        type: object
+                        required: [items, has_more, next_cursor]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Monitor' }
+                          has_more: { type: boolean }
+                          next_cursor: { type: [string, 'null'] }
         '400':
           description: Invalid cursor (malformed, foreign-version, or filter-mismatched)
           content:
@@ -469,9 +489,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Monitor' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Monitor' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
@@ -502,9 +524,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Monitor' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Monitor' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -551,9 +575,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Monitor' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Monitor' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -580,9 +606,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Monitor' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Monitor' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -625,17 +653,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [monitor_id, generation, channel_ids]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      monitor_id: { type: string, format: uuid }
-                      generation: { type: integer }
-                      channel_ids:
-                        type: array
-                        items: { type: string, format: uuid }
+                      data:
+                        type: object
+                        required: [monitor_id, generation, channel_ids]
+                        properties:
+                          monitor_id: { type: string, format: uuid }
+                          generation: { type: integer }
+                          channel_ids:
+                            type: array
+                            items: { type: string, format: uuid }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -672,15 +702,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      checks:
-                        type: array
-                        items: { $ref: '#/components/schemas/CheckHistoryRow' }
-                      page: { $ref: '#/components/schemas/Page' }
+                      data:
+                        type: object
+                        properties:
+                          checks:
+                            type: array
+                            items: { $ref: '#/components/schemas/CheckHistoryRow' }
+                          page: { $ref: '#/components/schemas/Page' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -708,15 +740,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      incidents:
-                        type: array
-                        items: { $ref: '#/components/schemas/IncidentRow' }
-                      page: { $ref: '#/components/schemas/Page' }
+                      data:
+                        type: object
+                        properties:
+                          incidents:
+                            type: array
+                            items: { $ref: '#/components/schemas/IncidentRow' }
+                          page: { $ref: '#/components/schemas/Page' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -745,9 +779,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/MonitorStats' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MonitorStats' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -768,9 +804,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/DashboardSummary' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DashboardSummary' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
   /notification-channels:
@@ -802,9 +840,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Channel' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Channel' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
@@ -839,15 +879,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [items]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      items:
-                        type: array
-                        items: { $ref: '#/components/schemas/Channel' }
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/Channel' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
   /notification-channels/{id}:
@@ -863,9 +905,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Channel' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Channel' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
@@ -915,9 +959,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data: { $ref: '#/components/schemas/Channel' }
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Channel' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/CSRFRejected' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -940,23 +986,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DataEnvelope'
-                properties:
-                  data:
-                    type: object
-                    required: [quota]
+                allOf:
+                  - $ref: '#/components/schemas/DataEnvelope'
+                  - type: object
                     properties:
-                      quota:
+                      data:
                         type: object
-                        required: [used, active, paused, limit, profile, as_of, source]
+                        required: [quota]
                         properties:
-                          used: { type: integer }
-                          active: { type: integer }
-                          paused: { type: integer }
-                          limit: { type: integer }
-                          profile: { type: string, enum: [local, hosted] }
-                          as_of: { type: string, format: date-time }
-                          source: { type: string, enum: [stamped, default, override] }
+                          quota:
+                            type: object
+                            required: [used, active, paused, limit, profile, as_of, source]
+                            properties:
+                              used: { type: integer }
+                              active: { type: integer }
+                              paused: { type: integer }
+                              limit: { type: integer }
+                              profile: { type: string, enum: [local, hosted] }
+                              as_of: { type: string, format: date-time }
+                              source: { type: string, enum: [stamped, default, override] }
 
   /notification-channels/{id}/test:
     post:

@@ -1,39 +1,77 @@
 import { Route, Routes } from "react-router-dom";
+import { RequireAdmin, RequireAuth, RequireGuest } from "../features/auth/guards";
+import { LoginPage } from "../features/auth/LoginPage";
+import { RegisterPage } from "../features/auth/RegisterPage";
+import { SessionProvider } from "../features/auth/session";
+import { AppShell } from "./AppShell";
 
-// Scaffold shell — semantic landmarks and the fallback route exist
-// now; feature pages land in their own cards (C69+).
+// Placeholder body for routes owned by later cards (C69+); the shell,
+// guards and nav exist now but these aren't the delivered features.
+function Pending({ title }: { title: string }) {
+  return <h1 className="text-lg font-semibold">{title}</h1>;
+}
+
+function NotFound() {
+  return (
+    <div role="alert" className="p-8">
+      <h1 className="text-lg font-semibold">Page not found</h1>
+      <p className="text-fg-muted">That route doesn’t exist.</p>
+    </div>
+  );
+}
+
 export function App() {
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-container px-4 py-2">
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-sm font-semibold tracking-wide">
-            UPTIME CONSOLE
-          </span>
-          <nav aria-label="Primary" className="flex gap-3 text-fg-secondary">
-            <span aria-current="page">Dashboard</span>
-          </nav>
-        </div>
-      </header>
-      <main className="p-4">
-        <Routes>
+    <SessionProvider>
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            <RequireGuest>
+              <LoginPage />
+            </RequireGuest>
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            <RequireGuest>
+              <RegisterPage />
+            </RequireGuest>
+          }
+        />
+        <Route
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
+          <Route path="/" element={<Pending title="Dashboard" />} />
+          <Route path="/monitors" element={<Pending title="Monitors" />} />
+          <Route path="/monitors/:id" element={<Pending title="Monitor detail" />} />
+          <Route path="/incidents" element={<Pending title="Incidents" />} />
+          <Route path="/channels" element={<Pending title="Channels" />} />
+          <Route path="/settings" element={<Pending title="Settings" />} />
           <Route
-            path="/"
+            path="/admin"
             element={
-              <h1 className="text-lg font-semibold">Dashboard</h1>
+              <RequireAdmin>
+                <Pending title="Admin overview" />
+              </RequireAdmin>
             }
           />
           <Route
-            path="*"
+            path="/admin/*"
             element={
-              <div role="alert">
-                <h1 className="text-lg font-semibold">Page not found</h1>
-                <p className="text-fg-muted">That route doesn’t exist.</p>
-              </div>
+              <RequireAdmin>
+                <Pending title="Admin" />
+              </RequireAdmin>
             }
           />
-        </Routes>
-      </main>
-    </div>
+        </Route>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </SessionProvider>
   );
 }
