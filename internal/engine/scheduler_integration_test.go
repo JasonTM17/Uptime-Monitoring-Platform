@@ -54,7 +54,7 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 	monID := seed(t)
 	n, err := s.Tick(ctx)
 	if err != nil || n != 1 {
-		t.Fatalf("first tick: n=%d err=%v", n, err)
+		t.Fatalf("first tick: n=%d err=%v lastErr=%v", n, err, s.LastErr())
 	}
 	// Active run exists -> no duplicate admission.
 	if n, _ := s.Tick(ctx); n != 0 {
@@ -68,7 +68,7 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 
 	// Pause -> skipped even when due-forced.
 	if _, err := conn.Exec(ctx, `
-		UPDATE uptime.monitors SET is_paused=true, next_check_at=now()
+		UPDATE uptime.monitors SET is_paused=true, next_check_at=now()-interval '1 second'
 		WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
@@ -88,18 +88,18 @@ func TestLifecycleChurnAdmissionBudget(t *testing.T) {
 	// Edit (generation bump): fresh segment required - stale-gen reuse
 	// would be a fence hole.
 	if _, err := conn.Exec(ctx, `
-		UPDATE uptime.monitors SET generation=generation+1, next_check_at=now()
+		UPDATE uptime.monitors SET generation=generation+1, next_check_at=now()-interval '1 second'
 		WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := s.Tick(ctx); n != 1 {
-		t.Fatalf("edited monitor not admitted: %d", n)
+		t.Fatalf("edited monitor not admitted: %d lastErr=%v", n, s.LastErr())
 	}
 	complete(monID)
 
 	// Delete: tombstoned monitor is never due.
 	if _, err := conn.Exec(ctx, `
-		UPDATE uptime.monitors SET deleted_at=now(), next_check_at=now()
+		UPDATE uptime.monitors SET deleted_at=now(), next_check_at=now()-interval '1 second'
 		WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}

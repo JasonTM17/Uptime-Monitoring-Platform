@@ -28,7 +28,7 @@ func seedDue(t *testing.T) (uuid.UUID, uuid.UUID) {
 	if err := conn.QueryRow(ctx, `
 		INSERT INTO uptime.monitors(id,user_id,name,target_url,method,
 		  interval_seconds,timeout_seconds,expected_status,next_check_at)
-		VALUES (gen_random_uuid(),$1,'m','https://x.test','GET',60,5,NULL,now())
+		VALUES (gen_random_uuid(),$1,'m','https://x.test','GET',60,5,NULL,now()-interval '1 second')
 		RETURNING id`, userID).Scan(&monID); err != nil {
 		t.Fatal(err)
 	}

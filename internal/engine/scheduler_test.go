@@ -175,19 +175,18 @@ func TestClockJumpCoalesces(t *testing.T) {
 	due := dueFor(uuid.New(), 1000) // huge overdue backlog after jump
 	s := schedForTest(pool, due, &calls)
 	clk.t = clk.t.Add(24 * time.Hour) // the jump
-	pool.Start(context.Background())
-	stopDrain := drain(pool)
-	defer func() { pool.CloseJobs(); pool.Wait(); stopDrain() }()
-
+	// Workers deliberately not started: the queue fills and stays
+	// full, so the admission bound is deterministic (<= queue cap).
 	n, err := s.Tick(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Bounded: at most queueCap+workers reservations can be in flight.
-	if calls > 6 {
-		t.Fatalf("catch-up storm: %d reservations", calls)
+	if n > 4 || calls > 4 {
+		t.Fatalf("catch-up storm: n=%d calls=%d", n, calls)
 	}
-	if n > 6 {
-		t.Fatalf("tick admitted unbounded: %d", n)
+	// A second tick in the same full-queue state admits nothing more.
+	n2, _ := s.Tick(context.Background())
+	if n2 != 0 || calls > 4 {
+		t.Fatalf("second tick stormed: n=%d calls=%d", n2, calls)
 	}
 }

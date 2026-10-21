@@ -39,7 +39,7 @@ func reserveRunFor(t *testing.T, conn *pgx.Conn, monID uuid.UUID, epoch int64, s
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx,
-		`UPDATE uptime.monitors SET next_check_at=now() WHERE id=$1`, monID); err != nil {
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second' WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := ReserveRun(ctx, conn, monID, caps, epoch)
