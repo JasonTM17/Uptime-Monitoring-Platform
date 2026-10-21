@@ -79,12 +79,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   // Mid-session 401 on any non-bootstrap query → session is gone.
+  // Read the live cache, not a closure — a 401 that lands between /me
+  // resolving and this effect re-registering must still end the session.
   useEffect(
     () =>
       onSessionEvent(() => {
-        if (authed) endSession(true);
+        if (qc.getQueryData<MeData>(["me"])) endSession(true);
       }),
-    [authed, endSession],
+    [qc, endSession],
   );
 
   const doLogin = useMutation({

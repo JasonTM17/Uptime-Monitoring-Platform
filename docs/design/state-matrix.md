@@ -49,3 +49,58 @@ Cells: what the user sees + what they can do. "—" = not applicable.
   "loading" text; charts render without animation.
 - **200% zoom / 390px** → every table degrades to stacked cards;
   filters collapse into a disclosure region.
+
+## Verification coverage (C76)
+
+How each state class is proven. **Mocked** = Playwright route
+interception over contract fixtures — proves UI state semantics, never
+live engine/provider behavior. **Unit** = Vitest + Testing Library over
+stubbed fetch. Live journeys land in the phase-09/11 acceptance cards.
+
+| State | Proven by | Evidence |
+|---|---|---|
+| login/logout identity race (A's rows never render for B) | `e2e/identity-race.spec.ts` | mocked |
+| admin nav granted per identity, re-probed after switch | `e2e/identity-race.spec.ts` | mocked |
+| mid-use revoked session → sign-in + notice | `e2e/ui-states.spec.ts` | mocked |
+| login inline errors (401, form preserved) | `e2e/ui-states.spec.ts` | mocked |
+| offline banner + reconnect recovery | `e2e/ui-states.spec.ts` | mocked (`context.setOffline`) |
+| denied ≠ empty across admin sections | `e2e/ui-states.spec.ts`, `e2e/admin-rbac.spec.ts` | mocked |
+| non-admin: no admin nav + deep-link denial | `e2e/admin-rbac.spec.ts` | mocked |
+| admin quota 409 explained, no silent retry | `e2e/admin-rbac.spec.ts` | mocked |
+| suspended user badge + restore-only affordance | `e2e/admin-rbac.spec.ts` | mocked |
+| dashboard quota / paused / stale / no-data badges | `e2e/user-monitor.spec.ts` | mocked |
+| paused filter reaches the API (param, not hidden) | `e2e/user-monitor.spec.ts` | mocked |
+| monitor detail no-evidence gap ("no samples", empty checks) | `e2e/user-monitor.spec.ts` | mocked |
+| create form inline validation + 409 quota scope | `e2e/user-monitor.spec.ts` | mocked |
+| outbox retry 202 = re-queued, suppress confirms | `e2e/admin-operations.spec.ts` | mocked |
+| engine freshness stale/absent never healthy-zero | `e2e/admin-operations.spec.ts` | mocked |
+| audit keyboard detail + read-only (no edit/export) | `e2e/admin-operations.spec.ts` | mocked |
+| channels lifecycle, queued-not-delivered, masked destinations | `e2e/channels.spec.ts` | mocked |
+| accessible chart + exact table disclosure, bounds labels | `e2e/monitor-detail.spec.ts` | mocked |
+| settings keyboard dialog walkthrough | `e2e/settings.spec.ts` | mocked |
+| roles catalog/ceiling/preset immutability + 409 | `e2e/admin-identity.spec.ts` | mocked |
+| page-level no-horizontal-scroll 360–1440 + 200% zoom | `e2e/responsive-a11y.spec.ts` | mocked |
+| axe zero-violations (dashboard + admin overview) | `e2e/responsive-a11y.spec.ts`, `e2e/shell.spec.ts` | mocked |
+| keyboard reaches nav/dialogs/filters at 390px | `e2e/responsive-a11y.spec.ts` | mocked |
+| reduced-motion: no animation-only state | `e2e/responsive-a11y.spec.ts` | mocked |
+| CSRF-before-mutation, cache-clear on identity switch | `src/features/auth/session.test.tsx` | unit |
+| per-section 403 panels (users/audit/monitors/outbox) | `src/features/admin/**/*.test.tsx` | unit |
+| missing/stale/absent telemetry tri-state | `src/features/admin/operations/admin-operations.test.tsx` | unit |
+| canary secrets absent from DOM **and** query cache | `src/features/admin/operations/admin-operations.test.tsx` | unit |
+| revoked session mid-action fails once, honestly | `src/features/admin/operations/admin-operations.test.tsx` | unit |
+| invalid cursor → invalid-filter error | `src/features/admin/operations/admin-operations.test.tsx` | unit |
+
+### Manual-review cells (no automated proof claimed)
+
+- Screen-reader announcements of live-region state changes — axe +
+  ARIA structure verified; narration reviewed manually, not automated.
+- Focus-order aesthetics inside complex dialogs — keyboard operability
+  is automated; order reasonableness is manual.
+
+### Explicitly NOT_RUN here
+
+- Live engine DOWN→recovery→UP lifecycle against a real scheduler.
+- Real Telegram/provider send success/failure.
+- Real Postgres-backed API journeys (auth→CRUD→admin end to end).
+  These belong to the phase-09/11 acceptance cards; mocked fixtures
+  above are labeled, never presented as live proof.

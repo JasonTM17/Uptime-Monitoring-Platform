@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,7 +72,7 @@ type Handler = (url: string, init?: RequestInit) => Promise<Response> | null;
 let handler: Handler;
 let posted: { url: string; method: string; body?: unknown; idem?: string | null }[] = [];
 
-const defaults = (url: string, init?: RequestInit) => {
+const defaults = (url: string, _init?: RequestInit) => {
   if (url === "/api/auth/me")
     return res({ data: { user: USER, session_expires_at: "t" } });
   if (url === "/api/auth/csrf") return res({ data: { csrf_token: "tok" } });
