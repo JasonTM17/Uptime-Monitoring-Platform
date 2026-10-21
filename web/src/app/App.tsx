@@ -1,6 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import { RequireAdmin, RequireAuth, RequireGuest } from "../features/auth/guards";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
+import { MonitorDetailPage } from "../features/monitors/MonitorDetailPage";
+import { MonitorsPage } from "../features/monitors/MonitorsPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
 import { SessionProvider } from "../features/auth/session";
@@ -49,8 +51,8 @@ export function App() {
           }
         >
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/monitors" element={<Pending title="Monitors" />} />
-          <Route path="/monitors/:id" element={<Pending title="Monitor detail" />} />
+          <Route path="/monitors" element={<MonitorsPage />} />
+          <Route path="/monitors/:id" element={<MonitorDetailPage />} />
           <Route path="/incidents" element={<Pending title="Incidents" />} />
           <Route path="/channels" element={<Pending title="Channels" />} />
           <Route path="/settings" element={<Pending title="Settings" />} />
