@@ -54,13 +54,18 @@ diff-prefix, quoting, attribute, and context-line tricks cannot bypass it.
 It refuses sensitive filenames, scans example-suffixed files for real
 secrets, decodes UTF-16 BOM text, and skips placeholder-shaped values
 (`${VAR}`, `replace-me`, `<yours>`). The pre-commit hook also requires the
-scanner file itself byte-identical to `HEAD`; a deliberate gate update goes
-in its own commit with `SCANNER_UPDATE=1 git commit ...`.
+scanner file itself hash-identical to `HEAD` (worktree `git hash-object`
+vs `HEAD:` blob vs index blob), which stays blind-proof against
+`assume-unchanged`/`skip-worktree` index bits; a deliberate gate update
+goes in its own commit with `SCANNER_UPDATE=1 git commit ...` and prints
+the staged set.
 
 Known residual limits, by design: unstaged file content and history;
-`--no-verify`, `merge`/`rebase`/`cherry-pick`, other clones, and pushes —
-the hook is local-clone only, so remote enforcement waits for a CI
-diff-scan job (a publication-gate item); binary blobs without a UTF-16
-BOM; secrets under the 12-char floor, multi-line/heredoc values, real
-secrets containing placeholder substrings, and shapes with no rule —
-review those at publication gates, not per commit.
+`--no-verify`, `merge`/`rebase`/`cherry-pick`, other clones, pushes, and
+host-environment tricks (`NODE_OPTIONS`, clean filters, PATH) — the hook
+is local-clone defense-in-depth, so remote enforcement waits for a CI
+diff-scan job (a publication-gate item); `scripts/testdata/` is the
+sanctioned fixture blind spot; binary blobs without a UTF-16 BOM; secrets
+under the 12-char floor, multi-line/heredoc values, real secrets
+containing placeholder substrings, and shapes with no rule — review
+those at publication gates, not per commit.

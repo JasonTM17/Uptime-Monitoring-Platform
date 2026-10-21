@@ -41,7 +41,7 @@ const RULES = [
   { name: 'telegram-bot-token', re: /\b\d{6,12}:[A-Za-z0-9_-]{35}\b/ },
   {
     name: 'dsn-with-password',
-    re: /\b(?:postgres(?:ql)?|mysql2?|mariadb|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s:/]*:[^\s@/]{3,}@/,
+    re: /\b(?:postgres(?:ql)?|mysql2?|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|https?|ftps?|ldaps?|smtps?|kafka|nats):\/\/[^\s:/]*:[^\s@/]{3,}@/,
   },
   { name: 'pem-private-key', re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/ },
   { name: 'aws-access-key-id', re: /\bAKIA[0-9A-Z]{16}\b/ },
@@ -70,7 +70,7 @@ const NAME_REFUSAL = [
 
 // These suffixes legitimately live in the repo (placeholders). They are
 // exempt from NAME refusal but never from content scanning.
-const NAME_EXEMPT = [/\.(example|sample|template|dist)$/i, /(^|\/)scripts\/testdata\//];
+const NAME_EXEMPT = [/\.(example|sample|template|dist)$/i, /^scripts\/testdata\//];
 
 // Content inside these repo-root paths is never scanned (inert fixtures
 // live here, including this file's own self-test literals). Anchored to
@@ -222,6 +222,8 @@ function selfTest() {
     ['allows fixture dir fully', !isSensitivePath('scripts/testdata/fixtures/leaky.txt') && isContentExempt('scripts/testdata/fixtures/leaky.txt')],
     ['skips own source (self-test literals)', isContentExempt('scripts/check-staged-secrets.mjs')],
     ['nested testdata NOT exempt', !isContentExempt('services/api/scripts/testdata/x.env')],
+    ['nested testdata .env refused', isSensitivePath('services/api/scripts/testdata/x.env')],
+    ['detects https basic-auth url', scanText(['API_BASE=https://admin:Sup3rPass@api.internal']).length > 0],
     ['redis host:port no auth passes', scanText(['r=redis://cache.internal:6379/0']).length === 0],
     ['clean fixture passes', scanText(clean).length === 0],
   ];
