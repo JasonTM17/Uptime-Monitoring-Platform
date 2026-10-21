@@ -128,6 +128,12 @@ func run() error {
 	// re-derives authorization under the security anchor — the session
 	// principal is only a snapshot. The shared pool conn is safe: every
 	// privileged recipe runs inside one transaction.
+	// Owner channel-test route: recent-auth gated TEST intent queue
+	// (C62). 202 = queued intent, never provider delivery.
+	opsSvc := notification.NewOperations(pool, cfg.Database.QueryTimeout)
+	testHandler := notification.NewTestHandler(opsSvc, pool, svc, csrfMgr,
+		notification.DefaultTestRate, cfg.HTTP.MaxJSONBodyBytes, log)
+
 	adminHandler := admin.NewRolesHandler(pool, svc, csrfMgr,
 		cfg.HTTP.MaxJSONBodyBytes, admin.QuotaCeilings{
 			RetainedOwner: cfg.Alloc.RetainedMonitorsOwner,
@@ -288,6 +294,8 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()},
 		httpserver.Mount{Pattern: "/notification-channels", Handler: chanHandler.Mux()},
 		httpserver.Mount{Pattern: "/notification-channels/", Handler: chanHandler.Mux()},
+		// The literal {id}/test pattern outranks the subtree mount.
+		httpserver.Mount{Pattern: "/notification-channels/{id}/test", Handler: testHandler.Mux()},
 		// Specific {id} patterns outrank the /monitors/ subtree mount.
 		httpserver.Mount{Pattern: "/monitors/{id}/checks", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/monitors/{id}/incidents", Handler: anaHandler.Mux()},

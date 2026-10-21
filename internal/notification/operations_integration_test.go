@@ -211,7 +211,7 @@ func TestQueueTestNotification(t *testing.T) {
 	// Unbound channel → refused.
 	unbound := mkChannel(t, c, f, "VERIFIED", true, false)
 	if _, err := ops.QueueTestNotification(context.Background(),
-		f.userID, f.monID, unbound, DefaultTestRate); !errors.Is(err, ErrNotOwned) {
+		f.userID, f.monID, unbound, DefaultTestRate); !errors.Is(err, ErrChannelNotBound) {
 		t.Fatalf("unbound: %v", err)
 	}
 	// Bind it.

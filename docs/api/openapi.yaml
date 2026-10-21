@@ -960,17 +960,24 @@ paths:
 
   /notification-channels/{id}/test:
     post:
-      tags: [planned]
-      summary: (C47/C57/C62) Send a test notification — NOT exposed yet
-      x-future: true
-      operationId: plannedChannelTest
+      tags: [notification]
+      summary: Queue one TEST intent (recent-auth required — 202 is queued, not delivered)
+      operationId: testNotificationChannel
       parameters:
         - $ref: '#/components/parameters/CSRFGuard'
         - $ref: '#/components/parameters/IdPath'
       responses:
-        '202': { description: Draft — queued vs delivered is distinct }
+        '202':
+          description: TEST intent persisted — the dispatcher claims and sends it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '200': { description: Same-window duplicate — existing intent stands }
         '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Channel unbound or unverified }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /incidents:
     get:
@@ -1196,6 +1203,74 @@ paths:
                   code: QUOTA_EXCEEDED
                   message: quota cap below current usage
                 request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/monitors/{id}/pause:
+    post:
+      tags: [admin]
+      summary: Pause any monitor globally (monitors:operate) — closes the open segment
+      operationId: pauseAdminMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200': { description: Monitor paused; generation bumped }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/monitors/{id}/resume:
+    post:
+      tags: [admin]
+      summary: Resume any monitor globally — due at first future slot, never check-now
+      operationId: resumeAdminMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200': { description: Monitor resumed; generation bumped }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Stale generation or suspended owner }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/deliveries/{id}/retry:
+    post:
+      tags: [admin]
+      summary: Re-arm one DEAD stream head (deliveries:retry) — 202 re-queued
+      operationId: retryAdminDelivery
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '202': { description: Head re-armed PENDING with a fresh attempt budget }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Not DEAD, stale version, or live predecessor }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/deliveries/{id}/suppress:
+    post:
+      tags: [admin]
+      summary: Suppress a causal stream from its head (deliveries:suppress)
+      operationId: suppressAdminDelivery
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '202': { description: Head plus live descendants terminalized SUPPRESSED }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Mid-stream row — resolve the stream head instead }
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
 components:

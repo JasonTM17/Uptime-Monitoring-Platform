@@ -79,6 +79,16 @@ func (h *RolesHandler) Mux() *http.ServeMux {
 	mux.HandleFunc("POST /admin/users/{id}/restore", guard(h.restore))
 	mux.HandleFunc("POST /admin/users/{id}/revoke-sessions", guard(h.revokeSessions))
 	mux.HandleFunc("PATCH /admin/users/{id}/quota", guard(h.setQuota))
+	mux.HandleFunc("POST /admin/monitors/{id}/pause", guard(h.pauseMonitor))
+	mux.HandleFunc("POST /admin/monitors/{id}/resume", guard(h.resumeMonitor))
+	mux.HandleFunc("POST /admin/deliveries/{id}/retry", guard(h.retryDelivery))
+	mux.HandleFunc("POST /admin/deliveries/{id}/suppress", guard(h.suppressDelivery))
+	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
+		mux.HandleFunc(m+" /admin/monitors/{id}/pause", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/monitors/{id}/resume", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/deliveries/{id}/retry", h.methodNotAllowed("POST"))
+		mux.HandleFunc(m+" /admin/deliveries/{id}/suppress", h.methodNotAllowed("POST"))
+	}
 	for _, m := range []string{"GET", "PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /admin/users/{id}/suspend", h.methodNotAllowed("POST"))
 		mux.HandleFunc(m+" /admin/users/{id}/restore", h.methodNotAllowed("POST"))
@@ -278,6 +288,86 @@ func (h *RolesHandler) revokeSessions(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, res.Status, res.Response)
 }
 
+// monitorAction is the shared pause/resume transport.
+func (h *RolesHandler) monitorAction(
+	fn func(context.Context, Beginner, ActorRef, uuid.UUID,
+		MonitorActionInput, string, []byte, time.Time) (PrivilegedResult, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, _ := auth.PrincipalFromContext(r.Context())
+		target, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			httpserver.WriteError(w, r, http.StatusBadRequest,
+				httpserver.ErrBadRequest, "invalid monitor id")
+			return
+		}
+		body, ok := h.readBody(w, r)
+		if !ok {
+			return
+		}
+		var in MonitorActionInput
+		if apiErr := httpserver.DecodeBodyBytes(body, &in); apiErr != nil {
+			httpserver.WriteError(w, r, apiErr.Status, apiErr.Code, apiErr.Msg)
+			return
+		}
+		res, err := fn(r.Context(), h.conn, actorRef(p), target, in,
+			r.Header.Get("Idempotency-Key"), body, h.now())
+		if err != nil {
+			h.writeErr(w, r, err)
+			return
+		}
+		httpserver.WriteJSON(w, r, res.Status, res.Response)
+	}
+}
+
+func (h *RolesHandler) pauseMonitor(w http.ResponseWriter, r *http.Request) {
+	h.monitorAction(PauseGlobalMonitor)(w, r)
+}
+
+func (h *RolesHandler) resumeMonitor(w http.ResponseWriter, r *http.Request) {
+	h.monitorAction(ResumeGlobalMonitor)(w, r)
+}
+
+// deliveryAction is the shared retry/suppress transport.
+func (h *RolesHandler) deliveryAction(
+	fn func(context.Context, Beginner, ActorRef, uuid.UUID,
+		DeliveryActionInput, string, []byte, time.Time) (PrivilegedResult, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, _ := auth.PrincipalFromContext(r.Context())
+		target, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			httpserver.WriteError(w, r, http.StatusBadRequest,
+				httpserver.ErrBadRequest, "invalid delivery id")
+			return
+		}
+		body, ok := h.readBody(w, r)
+		if !ok {
+			return
+		}
+		var in DeliveryActionInput
+		if apiErr := httpserver.DecodeBodyBytes(body, &in); apiErr != nil {
+			httpserver.WriteError(w, r, apiErr.Status, apiErr.Code, apiErr.Msg)
+			return
+		}
+		res, err := fn(r.Context(), h.conn, actorRef(p), target, in,
+			r.Header.Get("Idempotency-Key"), body, h.now())
+		if err != nil {
+			h.writeErr(w, r, err)
+			return
+		}
+		httpserver.WriteJSON(w, r, res.Status, res.Response)
+	}
+}
+
+func (h *RolesHandler) retryDelivery(w http.ResponseWriter, r *http.Request) {
+	h.deliveryAction(RetryDeliveryChain)(w, r)
+}
+
+func (h *RolesHandler) suppressDelivery(w http.ResponseWriter, r *http.Request) {
+	h.deliveryAction(SuppressDeliveryChain)(w, r)
+}
+
 func (h *RolesHandler) setQuota(w http.ResponseWriter, r *http.Request) {
 	p, _ := auth.PrincipalFromContext(r.Context())
 	target, err := uuid.Parse(r.PathValue("id"))
@@ -347,6 +437,9 @@ func (h *RolesHandler) writeErr(w http.ResponseWriter, r *http.Request, err erro
 	case errors.As(err, new(*QuotaConflict)):
 		httpserver.WriteError(w, r, http.StatusConflict,
 			httpserver.ErrQuota, "quota cap below current usage")
+	case errors.Is(err, ErrDeliveryNotHead), errors.Is(err, ErrDeliveryState):
+		httpserver.WriteError(w, r, http.StatusConflict,
+			httpserver.ErrConflict, "delivery is not retryable or suppressible here")
 	case errors.Is(err, ErrSubjectRevoked):
 		httpserver.WriteError(w, r, http.StatusNotFound,
 			httpserver.ErrNotFound, "subject not found")

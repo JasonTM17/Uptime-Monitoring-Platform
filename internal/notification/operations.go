@@ -22,7 +22,8 @@ var (
 	ErrNotDead           = errors.New("delivery is not DEAD")
 	ErrNotStreamHead     = errors.New("delivery is not the stream head")
 	ErrDeliveryConflict  = errors.New("delivery version changed")
-	ErrNotOwned          = errors.New("monitor/channel not owned or not bound")
+	ErrNotOwned          = errors.New("monitor/channel not owned")
+	ErrChannelNotBound   = errors.New("channel is not bound to the monitor")
 	ErrChannelIneligible = errors.New("channel is not an eligible verified recipient")
 	ErrDuplicateTest     = errors.New("a TEST intent is already outstanding")
 	ErrRateLimited       = errors.New("test notification rate limit")
@@ -199,7 +200,7 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 		return uuid.Nil, err
 	}
 	if !bound {
-		return uuid.Nil, ErrNotOwned
+		return uuid.Nil, ErrChannelNotBound
 	}
 
 	// 2) channel eligibility — same Deliverable contract the
