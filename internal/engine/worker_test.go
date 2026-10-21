@@ -19,17 +19,24 @@ func okObs(t checker.Target) checker.Observation {
 }
 
 type fakeChecker struct {
-	mu     sync.Mutex
-	peaked int32
-	cur    int32
-	delay  time.Duration
-	calls  int32
-	panic  bool
-	block  chan struct{} // non-nil: Check blocks until closed or ctx done
+	mu      sync.Mutex
+	peaked  int32
+	cur     int32
+	delay   time.Duration
+	calls   int32
+	panic   bool
+	block   chan struct{}      // non-nil: Check blocks until closed or ctx done
+	targets map[uuid.UUID]bool // MonitorIDs that reached Check
 }
 
 func (f *fakeChecker) Check(ctx context.Context, t checker.Target) checker.Observation {
 	atomic.AddInt32(&f.calls, 1)
+	f.mu.Lock()
+	if f.targets == nil {
+		f.targets = map[uuid.UUID]bool{}
+	}
+	f.targets[t.MonitorID] = true
+	f.mu.Unlock()
 	c := atomic.AddInt32(&f.cur, 1)
 	for {
 		m := atomic.LoadInt32(&f.peaked)
@@ -225,8 +232,7 @@ func TestPreAttemptCancellation(t *testing.T) {
 	p.Submit(ctx, mkJob()) // blocks the single worker
 	queued := mkJob()
 	p.Submit(ctx, queued) // sits in queue
-	before := atomic.LoadInt32(&f.calls)
-	cancel() // kill engine ctx while job queued
+	cancel()              // kill engine ctx while job queued
 	close(f.block)
 	p.CloseJobs()
 
@@ -246,8 +252,11 @@ func TestPreAttemptCancellation(t *testing.T) {
 				t.Fatal("canceled-queued job produced an observation")
 			}
 		default:
-			if got := atomic.LoadInt32(&f.calls); got != before {
-				t.Fatalf("canceled job did I/O: %d calls", got)
+			f.mu.Lock()
+			hit := f.targets[queued.Target.MonitorID]
+			f.mu.Unlock()
+			if hit {
+				t.Fatal("canceled-queued job reached the checker")
 			}
 			return
 		}

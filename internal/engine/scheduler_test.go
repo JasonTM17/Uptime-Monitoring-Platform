@@ -82,8 +82,11 @@ func TestSingleOwnerUtilizesPool(t *testing.T) {
 
 	owner := uuid.New()
 	s := schedForTest(pool, dueFor(owner, 100), nil)
+	// Tick until the backlog drains: each tick fills whatever queue
+	// space workers freed since the last - the bound only caps
+	// runaway, not per-tick throughput.
 	total := 0
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 500 && total < 100; i++ {
 		n, err := s.Tick(context.Background())
 		if err != nil {
 			t.Fatal(err)
