@@ -20,6 +20,14 @@ sample_uptime = successes / valid                 (null when valid = 0)
   `W_data`. Segments close on pause/suspend/delete/edit, so ineligible
   time never enters the denominator. The current interval is never
   stretched over history — each segment contributes its own grid.
+- **contiguous coverage** — segment handoffs anchor at the first
+  owed slot on both sides: a stale-generation close sets `ends_at`
+  to `LEAST(now, next_check_at)` and the successor's `starts_at` to
+  the same slot, so no lattice point is ever counted by two
+  segments and none falls outside all coverage. An interval change
+  additionally resets `next_check_at` to the edit instant — backlog
+  owed under the old cadence stays honestly missed under the old
+  grid and is never re-covered under the new one.
 - **valid** — accepted eligible observations (successes + failures).
 - **excluded** — accepted non-evidence (POLICY_BLOCKED, CANCELLED,
   INTERNAL_ERROR). Exclusions are real rows; they are never

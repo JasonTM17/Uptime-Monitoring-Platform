@@ -429,7 +429,8 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 				}
 				if _, err := tx.Exec(ctx, `
 				UPDATE uptime.schedule_segments
-				SET ends_at=clock_timestamp()
+				SET ends_at=(
+				  SELECT next_check_at FROM uptime.monitors WHERE id=$1)
 				WHERE monitor_id=$1 AND ends_at IS NULL`, id); err != nil {
 					return Monitor{}, err
 				}
@@ -467,7 +468,7 @@ func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID,
 				     WHERE id=$1 AND user_id=$2 RETURNING ` + monitorCols
 			} else {
 				q = `UPDATE uptime.monitors SET is_paused=false,
-				     next_check_at=now(),
+				     next_check_at=clock_timestamp(),
 				     generation=generation+1, updated_at=now()
 				     WHERE id=$1 AND user_id=$2 RETURNING ` + monitorCols
 			}
