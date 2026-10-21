@@ -11,7 +11,21 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
+
+// busyHasher fails both KDF paths with a configurable error —
+// exercises gate-saturation behavior fakes can't produce with a real
+// gate (a fresh gate per call never saturates).
+type busyHasher struct{ err error }
+
+func (b *busyHasher) HashPassword(context.Context, string) (string, error) {
+	return "", b.err
+}
+func (b *busyHasher) VerifyPassword(context.Context, string, string) (bool, error) {
+	return false, b.err
+}
 
 func registerUser(t *testing.T, svc *Service, email string) {
 	t.Helper()
@@ -155,6 +169,21 @@ func TestLogin(t *testing.T) {
 		var rl *RateLimitedError
 		if !errors.As(last, &rl) {
 			t.Fatalf("expected RateLimitedError, got %v", last)
+		}
+	})
+
+	t.Run("busy hash gate is uniform for known and unknown emails", func(t *testing.T) {
+		// A saturated gate answers ErrHashBusy on BOTH KDF paths; any
+		// asymmetry is an account-existence oracle (Wukong D1/F1).
+		busy := &busyHasher{err: ErrHashBusy}
+		store := newUserSessionStore()
+		svc := NewService(store, busy, testCfg())
+		store.putUser(User{ID: uuid.New(), Email: "k@x.co",
+			PasswordHash: "$argon2id$placeholder", Status: UserStatusActive})
+		_, _, errK := svc.Login(ctx, LoginInput{Email: "k@x.co", Password: validPW}, ip)
+		_, _, errU := svc.Login(ctx, LoginInput{Email: "ghost@x.co", Password: validPW}, ip)
+		if !errors.Is(errK, ErrHashBusy) || !errors.Is(errU, ErrHashBusy) {
+			t.Fatalf("busy gate asymmetric: known=%v unknown=%v", errK, errU)
 		}
 	})
 

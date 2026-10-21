@@ -70,10 +70,12 @@ func actorPredicate(u User, p Principal) error {
 	return nil
 }
 
-// RecheckActor re-reads the user under FOR UPDATE lock and verifies
-// the session's security_version and ACTIVE status still hold. Use
-// before every privileged commit — the context principal is stale the
-// moment it is captured.
+// RecheckActor re-reads the USER under FOR UPDATE lock and verifies
+// the session's security_version and ACTIVE status still hold. It is
+// the ACTOR-level fence only — privileged commits that must also
+// exclude a mid-request session revoke use WithActorLock, which
+// re-reads the session row under the same lock. The context principal
+// is stale the moment it is captured either way.
 func (s *Service) RecheckActor(ctx context.Context, p Principal) (User, error) {
 	var out User
 	err := s.store.WithUserLock(ctx, p.User.ID, func(_ pgx.Tx, u User) error {
@@ -104,7 +106,11 @@ func (s *Service) WithActorLock(ctx context.Context, p Principal,
 		if err != nil {
 			return err
 		}
-		if sess.RevokedAt != nil || !s.now().Before(sess.ExpiresAt) {
+		// Bind session→user too: the fence exists precisely to
+		// distrust the snapshot, so re-verify ownership, revocation,
+		// and both expiries under the lock.
+		if sess.UserID != u.ID || sess.RevokedAt != nil ||
+			!s.now().Before(sess.ExpiresAt) || !s.now().Before(sess.IdleExpiresAt) {
 			return ErrInvalidSession
 		}
 		return fn(tx, u)

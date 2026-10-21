@@ -90,10 +90,12 @@ func (s *Service) Login(ctx context.Context, in LoginInput, clientIP string) (Is
 		// INCLUDING error shape: a saturated hash gate must yield the
 		// same 429 here as it does on the known-email path below, else
 		// busy-window responses become an account-existence oracle.
-		if dh, derr := s.dummyHash(); derr == nil {
-			if _, verr := s.hasher.VerifyPassword(ctx, in.Password, dh); verr != nil {
-				return IssuedSession{}, PublicUser{}, verr
-			}
+		dh, derr := s.dummyHash()
+		if derr != nil {
+			return IssuedSession{}, PublicUser{}, derr
+		}
+		if _, verr := s.hasher.VerifyPassword(ctx, in.Password, dh); verr != nil {
+			return IssuedSession{}, PublicUser{}, verr
 		}
 		if !acctOK { // no owner exists to release the lock
 			return IssuedSession{}, PublicUser{}, &RateLimitedError{RetryAfter: acctWait}
