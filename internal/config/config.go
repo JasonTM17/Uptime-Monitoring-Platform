@@ -103,6 +103,10 @@ type AuthConfig struct {
 	ArgonSaltLen     uint32
 	ArgonKeyLen      uint32
 	HashWorkers      int
+	// Session expiries: absolute ceiling plus sliding idle (idle
+	// slides on authenticated activity but never past absolute).
+	SessionAbsoluteExpiry time.Duration
+	SessionIdleExpiry     time.Duration
 }
 
 // NotifyConfig gates notification delivery. The keyring contract is
@@ -182,6 +186,8 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	envUint32(lookup, errs, "ARGON2_SALT_LEN", &cfg.Auth.ArgonSaltLen)
 	envUint32(lookup, errs, "ARGON2_KEY_LEN", &cfg.Auth.ArgonKeyLen)
 	envInt(lookup, errs, "AUTH_HASH_WORKERS", &cfg.Auth.HashWorkers)
+	envDuration(lookup, errs, "SESSION_ABSOLUTE_EXPIRY", &cfg.Auth.SessionAbsoluteExpiry)
+	envDuration(lookup, errs, "SESSION_IDLE_EXPIRY", &cfg.Auth.SessionIdleExpiry)
 
 	envInt(lookup, errs, "ENGINE_WORKERS", &cfg.Engine.Workers)
 	envInt(lookup, errs, "ENGINE_QUEUE_SIZE", &cfg.Engine.QueueSize)
@@ -316,6 +322,9 @@ func defaultAuthConfig() AuthConfig {
 		ArgonSaltLen:     16,
 		ArgonKeyLen:      32,
 		HashWorkers:      2,
+		// Security contract: absolute 7d, sliding idle 24h.
+		SessionAbsoluteExpiry: 7 * 24 * time.Hour,
+		SessionIdleExpiry:     24 * time.Hour,
 	}
 }
 
@@ -386,6 +395,10 @@ func validate(cfg *Config, errs *LoadError) {
 	boundUint32(errs, "ARGON2_SALT_LEN", cfg.Auth.ArgonSaltLen, 8, 64)
 	boundUint32(errs, "ARGON2_KEY_LEN", cfg.Auth.ArgonKeyLen, 16, 64)
 	bound(errs, "AUTH_HASH_WORKERS", cfg.Auth.HashWorkers, 1, 8)
+	positive(errs, "SESSION_ABSOLUTE_EXPIRY", cfg.Auth.SessionAbsoluteExpiry)
+	if cfg.Auth.SessionIdleExpiry <= 0 || cfg.Auth.SessionIdleExpiry > cfg.Auth.SessionAbsoluteExpiry {
+		errs.add("SESSION_IDLE_EXPIRY", "must be > 0 and <= SESSION_ABSOLUTE_EXPIRY")
+	}
 
 	if cfg.Alloc.RetainedMonitorsOwner > cfg.Alloc.RetainedMonitorsGlobal {
 		errs.add("RETAINED_MONITORS_OWNER_LIMIT", "must be <= RETAINED_MONITORS_GLOBAL_LIMIT")

@@ -16,6 +16,8 @@ import (
 
 const validPW = "a very long password!"
 
+var testPol = SessionPolicy{Absolute: 7 * 24 * time.Hour, Idle: 24 * time.Hour}
+
 // countingHasher wraps the real hasher to prove validation happens
 // before any KDF work.
 type countingHasher struct {
@@ -68,6 +70,13 @@ func (f *fakeStore) FindUserByEmail(_ context.Context, email string) (User, erro
 }
 func (f *fakeStore) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.byKey) }
 
+// userSessionStore composes the user fake with the session fake into
+// a single Store (no method overlap).
+type userSessionStore struct {
+	*fakeStore
+	*fakeSessions
+}
+
 func TestNormalizeEmail(t *testing.T) {
 	cases := map[string]string{
 		"  User@Example.COM ": "user@example.com",
@@ -117,7 +126,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("happy path returns safe DTO only", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(newFakeStore(), ch)
+		svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, ch, testPol)
 		u, err := svc.Register(ctx, RegisterInput{
 			Email: "  Person@Site.com ", Password: validPW})
 		if err != nil {
@@ -132,7 +141,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("canonical-case duplicate maps to ErrEmailTaken", func(t *testing.T) {
 		store := newFakeStore()
-		svc := NewService(store, &countingHasher{})
+		svc := NewService(&userSessionStore{fakeStore: store, fakeSessions: newFakeSessions()}, &countingHasher{}, testPol)
 		if _, err := svc.Register(ctx, RegisterInput{Email: "dupe@x.co", Password: validPW}); err != nil {
 			t.Fatalf("first register: %v", err)
 		}
@@ -147,7 +156,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("invalid input never reaches the KDF", func(t *testing.T) {
 		ch := &countingHasher{}
-		svc := NewService(newFakeStore(), ch)
+		svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, ch, testPol)
 		_, err := svc.Register(ctx, RegisterInput{Email: "bad", Password: "x"})
 		var fe *FieldError
 		if !errors.As(err, &fe) {
@@ -160,7 +169,7 @@ func TestRegister(t *testing.T) {
 }
 
 func TestRegisterHandler(t *testing.T) {
-	svc := NewService(newFakeStore(), &countingHasher{})
+	svc := NewService(&userSessionStore{fakeStore: newFakeStore(), fakeSessions: newFakeSessions()}, &countingHasher{}, testPol)
 	mux := NewHandler(svc, 32<<10).Mux()
 	// Bodies are marshaled from maps so no credential-shaped literal
 	// appears in test source (staged-secret gate stays green).

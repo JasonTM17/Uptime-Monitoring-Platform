@@ -49,14 +49,30 @@ type PasswordHasher interface {
 	VerifyPassword(ctx context.Context, password, storedPHC string) (bool, error)
 }
 
-// Service owns identity use cases. Constructed once at composition.
-type Service struct {
-	store  UserStore
-	hasher PasswordHasher
+// Store is the combined persistence seam — *Repository satisfies it;
+// tests substitute fakes.
+type Store interface {
+	UserStore
+	SessionStore
 }
 
-func NewService(store UserStore, hasher PasswordHasher) *Service {
-	return &Service{store: store, hasher: hasher}
+// SessionPolicy carries configured session expiries.
+type SessionPolicy struct {
+	Absolute time.Duration
+	Idle     time.Duration
+}
+
+// Service owns identity use cases. Constructed once at composition.
+// now is injectable for deterministic expiry tests.
+type Service struct {
+	store  Store
+	hasher PasswordHasher
+	pol    SessionPolicy
+	now    func() time.Time
+}
+
+func NewService(store Store, hasher PasswordHasher, pol SessionPolicy) *Service {
+	return &Service{store: store, hasher: hasher, pol: pol, now: time.Now}
 }
 
 // PublicUser is the only shape that may leave the service layer — it

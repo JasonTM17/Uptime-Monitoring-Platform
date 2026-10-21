@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -118,4 +119,111 @@ func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (User, erro
 		return User{}, mapErr(err)
 	}
 	return u, nil
+}
+
+const sessionCols = `id,user_id,security_version,created_at,last_seen_at,expires_at,idle_expires_at,recent_auth_at,revoked_at,device_label`
+
+// qualCols prefixes every comma-separated column with an alias.
+func qualCols(alias, cols string) string {
+	return alias + "." + strings.ReplaceAll(cols, ",", ","+alias+".")
+}
+
+func scanSession(row pgx.Row) (Session, error) {
+	var s Session
+	err := row.Scan(&s.ID, &s.UserID, &s.SecurityVersion, &s.CreatedAt, &s.LastSeenAt,
+		&s.ExpiresAt, &s.IdleExpiresAt, &s.RecentAuthAt, &s.RevokedAt, &s.DeviceLabel)
+	return s, err
+}
+
+// CreateSession locks the user row FOR UPDATE, stamps the locked
+// security_version onto the session, and inserts — so a disable or
+// version bump cannot interleave between read and insert. A missing or
+// DISABLED user cannot mint sessions.
+func (r *Repository) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte,
+	expiresAt, idleExpiresAt time.Time, deviceLabel string) (Session, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, mapErr(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status string
+	var secVer int64
+	err = tx.QueryRow(ctx,
+		`SELECT status,security_version FROM uptime.users WHERE id=$1 FOR UPDATE`,
+		userID).Scan(&status, &secVer)
+	if err != nil {
+		return Session{}, mapErr(err)
+	}
+	if status != UserStatusActive {
+		return Session{}, ErrInvalidSession
+	}
+	s, err := scanSession(tx.QueryRow(ctx,
+		`INSERT INTO uptime.sessions
+		 (id,user_id,token_hash,security_version,expires_at,idle_expires_at,device_label)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+sessionCols,
+		uuid.New(), userID, tokenHash, secVer, expiresAt, idleExpiresAt, deviceLabel))
+	if err != nil {
+		return Session{}, mapErr(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, mapErr(err)
+	}
+	return s, nil
+}
+
+// FindSessionByTokenHash returns the session plus its owner row (status
+// and security_version are validated by the caller).
+func (r *Repository) FindSessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, User, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	var s Session
+	var u User
+	err := r.pool.QueryRow(ctx,
+		`SELECT `+qualCols("s", sessionCols)+`,`+qualCols("u", userCols)+`
+		 FROM uptime.sessions s JOIN uptime.users u ON u.id=s.user_id
+		 WHERE s.token_hash=$1`, tokenHash).Scan(
+		&s.ID, &s.UserID, &s.SecurityVersion, &s.CreatedAt, &s.LastSeenAt,
+		&s.ExpiresAt, &s.IdleExpiresAt, &s.RecentAuthAt, &s.RevokedAt, &s.DeviceLabel,
+		&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.Status,
+		&u.MonitorLimit, &u.SecurityVersion, &u.Version, &u.CreatedAt, &u.UpdatedAt, &u.DisabledAt)
+	if err != nil {
+		return Session{}, User{}, mapErr(err)
+	}
+	return s, u, nil
+}
+
+// TouchSession slides idle_expires_at forward and stamps last_seen.
+func (r *Repository) TouchSession(ctx context.Context, id uuid.UUID, seenAt, idleExpiresAt time.Time) error {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE uptime.sessions SET last_seen_at=$2,idle_expires_at=$3 WHERE id=$1`,
+		id, seenAt, idleExpiresAt)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokeSession stamps revoked_at once (idempotent for callers: a
+// missing or already-revoked row is still a successful no-op only when
+// the row exists).
+func (r *Repository) RevokeSession(ctx context.Context, id uuid.UUID) error {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE uptime.sessions SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, id)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
