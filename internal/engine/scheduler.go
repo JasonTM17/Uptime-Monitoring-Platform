@@ -42,6 +42,7 @@ func SelectDue(ctx context.Context, conn *pgx.Conn, now time.Time, limit int) ([
 		       m.timeout_seconds, m.interval_seconds, m.generation,
 		       m.next_check_at
 		FROM uptime.monitors m
+		JOIN uptime.users u ON u.id = m.user_id AND u.status='ACTIVE'
 		WHERE m.next_check_at <= $1
 		  AND NOT m.is_paused
 		  AND m.deleted_at IS NULL
@@ -143,7 +144,7 @@ func NewScheduler(w *Writer, pool *WorkerPool, epoch int64,
 		var res *Reservation
 		err := w.Exec(ctx, func(ctx context.Context, conn *pgx.Conn) error {
 			var e error
-			res, e = ReserveRun(ctx, conn, d.MonitorID, s.caps, epoch)
+			res, e = ReserveRun(ctx, conn, d.MonitorID, d.Generation, s.caps, epoch)
 			return e
 		})
 		return res, err

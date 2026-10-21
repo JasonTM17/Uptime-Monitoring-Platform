@@ -17,7 +17,7 @@ func finalizeFixture(t *testing.T, conn *pgx.Conn, epoch int64) FinalizeIdentity
 	t.Helper()
 	ctx := context.Background()
 	userID, monID := seedDue(t)
-	res, err := ReserveRun(ctx, conn, monID, caps, epoch)
+	res, err := ReserveRun(ctx, conn, monID, 1, caps, epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func reserveRunFor(t *testing.T, conn *pgx.Conn, monID uuid.UUID, epoch int64, s
 		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second' WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
-	res, err := ReserveRun(ctx, conn, monID, caps, epoch)
+	res, err := ReserveRun(ctx, conn, monID, 1, caps, epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,5 +268,79 @@ func TestExcludedFinalize(t *testing.T) {
 	}
 	if incs != 0 || obs != 0 {
 		t.Fatalf("excluded produced incident/outbox: %d %d", incs, obs)
+	}
+}
+
+// Regression for the streak/schema contract: persisted streaks are
+// capped (failure<=3, success<=2), so sustained same-direction
+// evidence must saturate at the threshold instead of wedging the
+// monitor's next reservation on a CHECK violation.
+func TestStreakSaturation(t *testing.T) {
+	ctx := context.Background()
+	conn := engineConn(t)
+	owner, _ := AcquireOwner(ctx, conn, uuid.New())
+	defer owner.Release(ctx)
+	w := NewWriter(owner, time.Minute)
+	for _, tbl := range []string{
+		"notification_outbox", "incidents", "check_results",
+		"check_runs", "schedule_segments", "monitor_channels", "monitors",
+	} {
+		if _, err := conn.Exec(ctx, "DELETE FROM uptime."+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+	_, monID := seedDue(t)
+
+	fin := func(obs checker.Observation) {
+		id := reserveRunFor(t, conn, monID, owner.Epoch(), 1)
+		out, err := w.FinalizeObservation(ctx,
+			FinalizeInput{Identity: id, Observation: obs})
+		if err != nil || out != FinalizeCommitted {
+			t.Fatalf("finalize: out=%v err=%v", out, err)
+		}
+	}
+
+	// Three failures reach DOWN; four more must saturate fs at 3 and
+	// still commit - every run reaches a terminal state.
+	for i := 0; i < 7; i++ {
+		fin(failObs(t, monID))
+	}
+	var fs int
+	var health string
+	conn.QueryRow(ctx,
+		`SELECT failure_streak, health::text FROM uptime.monitors WHERE id=$1`,
+		monID).Scan(&fs, &health)
+	if health != "DOWN" || fs != 3 {
+		t.Fatalf("post-failures: health=%s fs=%d want DOWN/3", health, fs)
+	}
+
+	// Two successes recover UP; three more saturate ss at 2.
+	for i := 0; i < 2; i++ {
+		fin(okObservation(t, monID))
+	}
+	var ss int
+	conn.QueryRow(ctx,
+		`SELECT success_streak, health::text FROM uptime.monitors WHERE id=$1`,
+		monID).Scan(&ss, &health)
+	if health != "UP" {
+		t.Fatalf("post-recovery: health=%s want UP", health)
+	}
+	for i := 0; i < 3; i++ {
+		fin(okObservation(t, monID))
+	}
+	conn.QueryRow(ctx,
+		`SELECT success_streak, health::text FROM uptime.monitors WHERE id=$1`,
+		monID).Scan(&ss, &health)
+	if health != "UP" || ss != 2 {
+		t.Fatalf("saturated: health=%s ss=%d want UP/2", health, ss)
+	}
+
+	// The monitor remains schedulable - no wedged active run.
+	var active int
+	conn.QueryRow(ctx,
+		`SELECT count(*) FROM uptime.check_runs
+		  WHERE monitor_id=$1 AND status IN ('RESERVED','RUNNING')`, monID).Scan(&active)
+	if active != 0 {
+		t.Fatalf("active runs wedge: %d", active)
 	}
 }

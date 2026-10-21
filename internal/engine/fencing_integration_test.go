@@ -17,7 +17,7 @@ func mkIdentity(t *testing.T, conn *pgx.Conn, epoch int64) (FinalizeIdentity, uu
 	t.Helper()
 	ctx := context.Background()
 	userID, monID := seedDue(t)
-	res, err := ReserveRun(ctx, conn, monID, caps, epoch)
+	res, err := ReserveRun(ctx, conn, monID, 1, caps, epoch)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}

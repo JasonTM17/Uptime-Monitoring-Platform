@@ -59,6 +59,9 @@ type Engine struct {
 
 	coordStop chan struct{}
 	coordDone chan struct{}
+	coordOnce sync.Once
+
+	lastErr atomic.Value // error  -  most recent finalize failure
 
 	once    sync.Once
 	shutErr error
@@ -69,7 +72,10 @@ type Engine struct {
 // Engine owns conn — Shutdown releases the lock and closes it.
 func StartEngine(ctx context.Context, conn *pgx.Conn, instance uuid.UUID,
 	p EngineParams, ch Checker) (*Engine, error) {
-
+	if p.TickEvery <= 0 || p.BatchLimit <= 0 || p.Workers <= 0 ||
+		p.QueueSize <= 0 || p.HeartbeatEvery <= 0 || p.FinalizeTimeout <= 0 {
+		return nil, errors.New("engine: invalid EngineParams (all bounds must be positive)")
+	}
 	owner, err := AcquireOwner(ctx, conn, instance)
 	if err != nil {
 		return nil, err
@@ -99,6 +105,17 @@ func StartEngine(ctx context.Context, conn *pgx.Conn, instance uuid.UUID,
 	go e.runScheduler(p.TickEvery)
 	go e.runCoordinator()
 	go e.writer.Run(e.tickCtx)
+	// Ownership death quiesces the engine: a dead writer can never
+	// write again  -  stop admission and the coordinator rather than
+	// spin forever producing guaranteed-fenced work.
+	go func() {
+		<-e.writer.Done()
+		if !e.writer.Alive() {
+			e.ready.Store(false)
+			e.cancelTick()
+			e.coordOnce.Do(func() { close(e.coordStop) })
+		}
+	}()
 	return e, nil
 }
 
@@ -113,6 +130,15 @@ func (e *Engine) Ready(context.Context) error {
 
 // State exposes the immutable ownership snapshot for diagnostics.
 func (e *Engine) State() OwnerState { return e.writer.State() }
+
+// LastErr reports the most recent finalize failure, or nil  -  the
+// diagnostic surface for errors the coordinator cannot return.
+func (e *Engine) LastErr() error {
+	if v := e.lastErr.Load(); v != nil {
+		return v.(error)
+	}
+	return nil
+}
 
 func (e *Engine) runScheduler(every time.Duration) {
 	defer close(e.tickDone)
@@ -146,7 +172,7 @@ func (e *Engine) runCoordinator() {
 func (e *Engine) finalize(ctx context.Context, r Result) {
 	fctx, cancel := context.WithTimeout(ctx, e.finalizeTimeout)
 	defer cancel()
-	_, _ = e.writer.FinalizeObservation(fctx, FinalizeInput{
+	_, err := e.writer.FinalizeObservation(fctx, FinalizeInput{
 		Identity: FinalizeIdentity{
 			RunID: r.Job.RunID, MonitorID: r.Job.MonitorID,
 			OwnerID: r.Job.OwnerID, SegmentID: r.Job.SegmentID,
@@ -155,6 +181,27 @@ func (e *Engine) finalize(ctx context.Context, r Result) {
 		},
 		Observation: r.Observation,
 	})
+	if err == nil {
+		return
+	}
+	e.lastErr.Store(err)
+	// A failed finalize leaves the run RESERVED  -  and one active run
+	// pins the monitor forever. Best-effort STALE frees the slot; if
+	// the commit actually landed, the terminal-status guard is a
+	// no-op, so this is safe under commit ambiguity.
+	_ = e.writer.Exec(context.Background(),
+		func(ctx context.Context, conn *pgx.Conn) error {
+			tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx)
+			if _, err := MarkStaleRun(ctx, tx, r.Job.RunID,
+				"STALE", "finalize_error"); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		})
 }
 
 // Shutdown runs the ordered, bounded stop. Idempotent: concurrent and
@@ -199,7 +246,7 @@ func (e *Engine) shutdown(ctx context.Context) error {
 	// 4) coordinator waits the worker WaitGroup before result
 	//    consumption ends. Leftover buffered results finalize inside
 	//    the remaining budget, or stay RESERVED for the next owner.
-	close(e.coordStop)
+	e.coordOnce.Do(func() { close(e.coordStop) })
 	select {
 	case <-e.coordDone:
 	case <-ctx.Done():

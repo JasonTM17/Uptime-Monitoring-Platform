@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/incident"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -401,7 +402,7 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 	expectedGen int64, in WriteFields) (Monitor, error) {
 	return r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
 		func(tx pgx.Tx, m Monitor) (Monitor, error) {
-			return scanMonitor(tx.QueryRow(ctx,
+			out, err := scanMonitor(tx.QueryRow(ctx,
 				`UPDATE uptime.monitors SET
 				   name=$3, target_url=$4, interval_seconds=$5,
 				   timeout_seconds=$6, expected_status=$7,
@@ -410,6 +411,16 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 				 RETURNING `+monitorCols,
 				id, ownerID, in.Name, in.TargetURL, in.IntervalSeconds,
 				in.TimeoutSeconds, in.ExpectedStatus))
+			if err != nil {
+				return Monitor{}, err
+			}
+			// Config change closes any open incident  -  honestly, as
+			// CONFIG_CHANGED, never as observed recovery.
+			if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
+				id, nil, incident.ReasonConfigChanged); err != nil {
+				return Monitor{}, err
+			}
+			return out, nil
 		})
 }
 
@@ -440,7 +451,17 @@ func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID,
 				     generation=generation+1, updated_at=now()
 				     WHERE id=$1 AND user_id=$2 RETURNING ` + monitorCols
 			}
-			return scanMonitor(tx.QueryRow(ctx, q, id, ownerID))
+			out, err := scanMonitor(tx.QueryRow(ctx, q, id, ownerID))
+			if err != nil {
+				return Monitor{}, err
+			}
+			if paused {
+				if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
+					id, nil, incident.ReasonConfigChanged); err != nil {
+					return Monitor{}, err
+				}
+			}
+			return out, nil
 		})
 }
 
@@ -458,6 +479,10 @@ func (r *Repository) SoftDeleteMonitorTx(ctx context.Context, tx pgx.Tx, ownerID
 				 WHERE id=$1 AND user_id=$2`, id, ownerID)
 			if err != nil {
 				return Monitor{}, mapErr(err)
+			}
+			if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
+				id, nil, incident.ReasonDeleted); err != nil {
+				return Monitor{}, err
 			}
 			return m, nil
 		})

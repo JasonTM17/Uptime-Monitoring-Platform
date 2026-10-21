@@ -86,7 +86,7 @@ func (Repository) OpenIncident(ctx context.Context, tx pgx.Tx,
 // reason. Returns false when nothing was open — callers decide
 // whether that's an error.
 func (Repository) CloseIncident(ctx context.Context, tx pgx.Tx,
-	monitorID, resolvedCheckID uuid.UUID, reason CloseReason) (bool, error) {
+	monitorID uuid.UUID, resolvedCheckID *uuid.UUID, reason CloseReason) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE uptime.incidents
 		SET resolved_at=clock_timestamp(), resolved_check_id=$2,

@@ -134,7 +134,7 @@ func TestOneOpenIncident(t *testing.T) {
 	if err != nil || got.ID != in.ID {
 		t.Fatalf("active lookup: %v %+v", err, got)
 	}
-	closed, err := repo.CloseIncident(ctx, tx, monID, runID, ReasonRecovered)
+	closed, err := repo.CloseIncident(ctx, tx, monID, &runID, ReasonRecovered)
 	if err != nil || !closed {
 		t.Fatalf("close: %v closed=%v", err, closed)
 	}
@@ -184,7 +184,7 @@ func TestLifecycleClosureCause(t *testing.T) {
 		if _, err := repo.OpenIncident(ctx, tx, monID, runID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := repo.CloseIncident(ctx, tx, monID, runID, reason); err != nil {
+		if _, err := repo.CloseIncident(ctx, tx, monID, &runID, reason); err != nil {
 			t.Fatal(err)
 		}
 		tx.Commit(ctx)
@@ -201,7 +201,7 @@ func TestLifecycleClosureCause(t *testing.T) {
 	// Closing with nothing open reports false - no fabricated closure.
 	monID, runID := seedRun(t, c)
 	tx, _ := c.Begin(ctx)
-	closed, err := repo.CloseIncident(ctx, tx, monID, runID, ReasonRecovered)
+	closed, err := repo.CloseIncident(ctx, tx, monID, &runID, ReasonRecovered)
 	if err != nil {
 		t.Fatal(err)
 	}

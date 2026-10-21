@@ -18,11 +18,14 @@ type AdmissionCaps struct {
 }
 
 var (
-	ErrAdmissionFull   = errors.New("engine: admission window capacity reached")
-	ErrActiveRun       = errors.New("engine: monitor already has an active run")
-	ErrMonitorNotDue   = errors.New("engine: monitor not admittable")
-	ErrStaleGeneration = errors.New("engine: monitor generation changed")
-	ErrNoBudget        = errors.New("engine: quota budget row missing")
+	ErrAdmissionFull = errors.New("engine: admission window capacity reached")
+	// ErrOwnerAdmissionFull denies only this owner's window  -  other
+	// owners' due work may still fit the global cap in the same tick.
+	ErrOwnerAdmissionFull = errors.New("engine: owner admission window capacity reached")
+	ErrActiveRun          = errors.New("engine: monitor already has an active run")
+	ErrMonitorNotDue      = errors.New("engine: monitor not admittable")
+	ErrStaleGeneration    = errors.New("engine: monitor generation changed")
+	ErrNoBudget           = errors.New("engine: quota budget row missing")
 )
 
 // Reservation is a committed check_run plus the schedule state it
@@ -48,7 +51,7 @@ type Reservation struct {
 // advance; a rollback is neither. The caller enqueues only after this
 // returns nil --- never before.
 func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
-	caps AdmissionCaps, epoch int64) (*Reservation, error) {
+	expectedGen int64, caps AdmissionCaps, epoch int64) (*Reservation, error) {
 
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -60,17 +63,27 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 	var ownerID uuid.UUID
 	var userStatus string
 	if err := tx.QueryRow(ctx,
-		`SELECT user_id,'ACTIVE' FROM uptime.monitors m
+		`SELECT user_id,u.status FROM uptime.monitors m
 		 JOIN uptime.users u ON u.id=m.user_id
 		 WHERE m.id=$1 FOR UPDATE OF u`, monitorID).
 		Scan(&ownerID, &userStatus); err != nil {
 		return nil, fmt.Errorf("lock owner: %w", err)
 	}
+	if userStatus != "ACTIVE" {
+		return nil, ErrMonitorNotDue
+	}
 
-	// 2) global quota budget row --- fail closed if never seeded.
-	if _, err := tx.Exec(ctx,
-		`SELECT global_monitor_limit FROM uptime.quota_budgets WHERE id=1 FOR UPDATE`); err != nil {
-		return nil, ErrNoBudget
+	// 2) global quota budget row --- fail closed if never seeded. A
+	//    SELECT via Exec cannot see the missing row (command tags
+	//    never carry ErrNoRows) --- scan it.
+	var budget int
+	if err := tx.QueryRow(ctx,
+		`SELECT global_monitor_limit FROM uptime.quota_budgets WHERE id=1 FOR UPDATE`).
+		Scan(&budget); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNoBudget
+		}
+		return nil, fmt.Errorf("lock budget: %w", err)
 	}
 
 	// 3) monitor row --- recheck admissibility under lock.
@@ -94,6 +107,13 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 	if deleted != nil || paused {
 		return nil, ErrMonitorNotDue
 	}
+	// Recheck the select-time generation under lock: a mutation
+	// committed in the SelectDue->reserve gap must not be honored
+	// against the stale candidate projection. Due-ness is rechecked at
+	// step 6, after the admission and active-run fences.
+	if gen != expectedGen {
+		return nil, ErrStaleGeneration
+	}
 
 	// 4) rolling-60s admission: owner scope, then global. Every status
 	// counts --- a committed reservation is a charge.
@@ -107,7 +127,7 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 		return nil, err
 	}
 	if ownerCount >= caps.OwnerPer60s {
-		return nil, ErrAdmissionFull
+		return nil, ErrOwnerAdmissionFull
 	}
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM uptime.check_runs
@@ -119,7 +139,29 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 		return nil, ErrAdmissionFull
 	}
 
-	// 5) Current segment --- engine-owned lifecycle: open one under the
+	// 5) One in-flight run per monitor: an unfinished run means the
+	//    scheduler must wait for finalize, not reserve again. Checked
+	//    under the monitor lock; the partial unique index still fences
+	//    any race the lock misses.
+	var active int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM uptime.check_runs
+		WHERE monitor_id=$1 AND status IN ('RESERVED','RUNNING')`,
+		monitorID).Scan(&active); err != nil {
+		return nil, err
+	}
+	if active > 0 {
+		return nil, ErrActiveRun
+	}
+
+	// 6) Due-ness recheck under lock --- a mutation or a rival reserve
+	//    committed in the SelectDue->reserve gap must not be honored
+	//    against the stale candidate projection.
+	if nextDue.After(time.Now()) {
+		return nil, ErrMonitorNotDue
+	}
+
+	// 7) Current segment --- engine-owned lifecycle: open one under the
 	// CURRENT generation if missing or stale (a mutation closes it by
 	// bumping generation; a stale open segment is closed here, same tx).
 	var segID uuid.UUID
@@ -148,20 +190,7 @@ func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 		return nil, fmt.Errorf("current segment: %w", err)
 	}
 
-	// 6) One in-flight run per monitor: an unfinished run means the
-	// scheduler must wait for finalize, not reserve again.
-	var active int
-	if err := tx.QueryRow(ctx, `
-		SELECT count(*) FROM uptime.check_runs
-		WHERE monitor_id=$1 AND status IN ('RESERVED','RUNNING')`,
-		monitorID).Scan(&active); err != nil {
-		return nil, err
-	}
-	if active > 0 {
-		return nil, ErrActiveRun
-	}
-
-	// 7) Latest nominal slot <= now inside this segment: an overdue
+	// 8) Latest nominal slot <= now inside this segment: an overdue
 	// monitor charges the owed next_check_at; an early call charges
 	// now. reserved_at is the DB clock taken AFTER the locks.
 	seq := lastSeq + 1

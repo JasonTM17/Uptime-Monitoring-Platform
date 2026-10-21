@@ -113,7 +113,9 @@ func run() error {
 		log.Error("engine conn failed; checks will not run", "err", err)
 	} else if e, err := engine.StartEngine(ctx, engConn, uuid.New(),
 		engine.EngineParams{
-			TickEvery:  cfg.Engine.CheckInterval,
+			// Spec cadence: the scheduler ticks every second; per-monitor
+			// cadence lives in interval_seconds, not in the tick rate.
+			TickEvery:  time.Second,
 			BatchLimit: cfg.Engine.QueueSize,
 			Workers:    cfg.Engine.Workers,
 			QueueSize:  cfg.Engine.QueueSize,

@@ -95,12 +95,12 @@ func (w *Writer) FinalizeObservation(ctx context.Context, in FinalizeInput) (Fin
 
 		// 3) Reducer on the locked monitor row — streaks and health move
 		// only via eligible evidence; exclusions reset streaks, not health.
-		var health string
+		var health, monName string
 		var fs, ss int
 		if err := tx.QueryRow(ctx, `
-			SELECT health, failure_streak, success_streak
+			SELECT health, failure_streak, success_streak, name
 			FROM uptime.monitors WHERE id=$1`, in.Identity.MonitorID).
-			Scan(&health, &fs, &ss); err != nil {
+			Scan(&health, &fs, &ss, &monName); err != nil {
 			return err
 		}
 		state := incident.State{
@@ -136,24 +136,33 @@ func (w *Writer) FinalizeObservation(ctx context.Context, in FinalizeInput) (Fin
 			if _, err := notification.AppendTransitionDeliveries(ctx, tx,
 				notification.TransitionInput{
 					UserID: in.Identity.OwnerID, MonitorID: in.Identity.MonitorID,
-					IncidentID: inc.ID, Kind: notification.EventDown,
+					MonitorName: monName,
+					IncidentID:  inc.ID, Kind: notification.EventDown,
 					ObservedAt: obs.CheckedAt,
 				}); err != nil {
 				return err
 			}
 		case incident.EffectRecovered:
+			// The reducer believes an incident is open; a config or
+			// delete closure may have already resolved it. Missing
+			// active incident is NOT a finalize failure  -  skip the
+			// close and the recovery intent rather than wedge the run.
 			active, err := repo.GetActiveIncident(ctx, tx, in.Identity.MonitorID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				break
+			}
 			if err != nil {
 				return err
 			}
 			if _, err := repo.CloseIncident(ctx, tx, in.Identity.MonitorID,
-				in.Identity.RunID, incident.ReasonRecovered); err != nil {
+				&in.Identity.RunID, incident.ReasonRecovered); err != nil {
 				return err
 			}
 			if _, err := notification.AppendTransitionDeliveries(ctx, tx,
 				notification.TransitionInput{
 					UserID: in.Identity.OwnerID, MonitorID: in.Identity.MonitorID,
-					IncidentID: active.ID, Kind: notification.EventRecovery,
+					MonitorName: monName,
+					IncidentID:  active.ID, Kind: notification.EventRecovery,
 					ObservedAt: obs.CheckedAt,
 				}); err != nil {
 				return err

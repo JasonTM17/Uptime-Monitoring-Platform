@@ -100,6 +100,12 @@ func Reduce(s State, o checker.Observation) (State, Transition) {
 			s.Health = HealthUp
 			tr.Next = HealthUp // initial establishment, not a recovery
 		}
+		// Saturate at the threshold: a streak only ever proves
+		// "N consecutive"  -  more evidence changes nothing, and the
+		// schema CHECK bounds the column at the threshold.
+		if s.SuccessStreak > RecoverThreshold {
+			s.SuccessStreak = RecoverThreshold
+		}
 		return s, tr
 	}
 	// Eligible failure.
@@ -109,6 +115,9 @@ func Reduce(s State, o checker.Observation) (State, Transition) {
 		s.Health = HealthDown
 		s.FailureStreak = 0
 		tr.Next, tr.Effect = HealthDown, EffectIncidentOpened
+	}
+	if s.FailureStreak > FailThreshold {
+		s.FailureStreak = FailThreshold
 	}
 	return s, tr
 }

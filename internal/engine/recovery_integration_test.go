@@ -59,7 +59,7 @@ func TestRestartSchedules(t *testing.T) {
 	e1 := o1.Epoch()
 
 	_, monID := seedDue(t)
-	res, err := ReserveRun(ctx, c1, monID, caps, e1)
+	res, err := ReserveRun(ctx, c1, monID, 1, caps, e1)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -130,7 +130,12 @@ func TestRestartSchedules(t *testing.T) {
 	}
 	// Oracle 4: restart resumes FORWARD — the next reservation on the
 	// same monitor continues the sequence, not a replay of slot 1.
-	r2, err := ReserveRun(ctx, c2, monID, caps, o2.Epoch())
+	if _, err := c2.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := ReserveRun(ctx, c2, monID, 1, caps, o2.Epoch())
 	if err != nil {
 		t.Fatalf("post-restart reserve: %v", err)
 	}
@@ -166,7 +171,7 @@ func TestDualProcessOwnership(t *testing.T) {
 	c2 = engineConn(t)
 
 	userID, monID := seedDue(t)
-	res, err := ReserveRun(ctx, c1, monID, caps, e1)
+	res, err := ReserveRun(ctx, c1, monID, 1, caps, e1)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -366,7 +371,7 @@ func TestQueueDelayCannotCreateTargetIncident(t *testing.T) {
 	w := NewWriter(o, time.Minute)
 
 	userID, monID := seedDue(t)
-	res, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+	res, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -465,7 +470,17 @@ func TestQueueDelayCannotCreateTargetIncident(t *testing.T) {
 
 	// Positive control: a target that genuinely outruns its attempt
 	// budget DOES produce an eligible TIMEOUT — the deadline is real.
-	res2, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+	if _, err := conn.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 	if err != nil {
 		t.Fatalf("control reserve: %v", err)
 	}
@@ -522,7 +537,12 @@ func TestQueueDelayCannotCreateTargetIncident(t *testing.T) {
 
 	// F02: cancel while a job still waits — its checker is never
 	// invoked and the reservation stays RESERVED (recoverable).
-	res3, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+	if _, err := conn.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	res3, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 	if err != nil {
 		t.Fatalf("cancel-case reserve: %v", err)
 	}

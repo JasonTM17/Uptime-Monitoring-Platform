@@ -48,6 +48,8 @@ type WorkerPool struct {
 	workers int
 	wg      sync.WaitGroup
 	started sync.Once
+	mu      sync.RWMutex
+	closed  bool
 }
 
 func NewWorkerPool(workers, queueSize int, ch Checker) *WorkerPool {
@@ -62,6 +64,11 @@ func NewWorkerPool(workers, queueSize int, ch Checker) *WorkerPool {
 // Submit enqueues a job, honoring cancellation and queue backpressure.
 // Only the coordinator may call it; returns false when ctx ended first.
 func (p *WorkerPool) Submit(ctx context.Context, j Job) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return false
+	}
 	select {
 	case p.jobs <- j:
 		return true
@@ -71,8 +78,14 @@ func (p *WorkerPool) Submit(ctx context.Context, j Job) bool {
 }
 
 // TrySubmit enqueues without blocking; false means the queue was full
-// at call time. The scheduler uses this after checking Capacity.
+// or the pool is closed. The send and the close are serialized on
+// p.mu  -  a submit racing shutdown returns false, it cannot panic.
 func (p *WorkerPool) TrySubmit(j Job) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return false
+	}
 	select {
 	case p.jobs <- j:
 		return true
@@ -104,8 +117,16 @@ func (p *WorkerPool) Wait() { p.wg.Wait() }
 
 // CloseJobs is the coordinator's shutdown signal: close the input
 // after the last Submit, then Wait for the in-flight set to finish.
-// Callers must not Submit after CloseJobs.
-func (p *WorkerPool) CloseJobs() { close(p.jobs) }
+// Idempotent  -  the mutex also serializes against in-flight TrySubmit,
+// so no send can land on the closed channel.
+func (p *WorkerPool) CloseJobs() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.closed {
+		close(p.jobs)
+		p.closed = true
+	}
+}
 
 func (p *WorkerPool) runWorker(ctx context.Context) {
 	defer p.wg.Done()
@@ -144,8 +165,17 @@ func (p *WorkerPool) runWorker(ctx context.Context) {
 func (p *WorkerPool) execute(ctx context.Context, job Job) (obs checker.Observation) {
 	defer func() {
 		if r := recover(); r != nil {
-			obs, _ = checker.NewObservation(job.Target,
+			var err error
+			obs, err = checker.NewObservation(job.Target,
 				checker.OutcomeInternalError, nil, nil, time.Now())
+			if err != nil {
+				// Never fabricate a zero-value (Success) observation.
+				obs = checker.Observation{
+					MonitorID: job.Target.MonitorID,
+					Outcome:   checker.OutcomeInternalError,
+					CheckedAt: time.Now(),
+				}
+			}
 		}
 	}()
 	cctx, cancel := context.WithTimeout(ctx,

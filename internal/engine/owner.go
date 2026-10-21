@@ -67,12 +67,42 @@ func BumpEpoch(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (int64, 
 
 // AcquireOwner takes the session-scoped advisory lock on the given
 // DEDICATED connection (callers must pass a direct pgx.Conn, never a
-// pooled borrow), then bumps the epoch inside one transaction. It
-// blocks until the lock is held or ctx expires --- lock contention
-// means another owner is live and this process must not start.
+// pooled borrow), then bumps the epoch inside one transaction.
+//
+// Acquisition is a bounded try-lock loop --- never an unbounded
+// pg_advisory_lock block: contention means another owner is live, so
+// we retry briefly (a draining predecessor may release mid-startup)
+// and then fail fast instead of hanging the process while it reports
+// ready. ctx bounds the whole wait.
 func AcquireOwner(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (*Owner, error) {
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", ownerLockKey); err != nil {
-		return nil, fmt.Errorf("%w: advisory lock: %v", ErrAcquire, err)
+	// Bound every later command on this dedicated session: a stalled
+	// row lock or runaway query must error, not freeze the engine's
+	// only writer while readiness still reports alive.
+	if _, err := conn.Exec(ctx, `
+		SET lock_timeout='5s';
+		SET statement_timeout='15s';
+		SET idle_in_transaction_session_timeout='30s'`); err != nil {
+		return nil, fmt.Errorf("%w: session bounds: %v", ErrAcquire, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var held bool
+		err := conn.QueryRow(ctx,
+			"SELECT pg_try_advisory_lock($1)", ownerLockKey).Scan(&held)
+		if err != nil {
+			return nil, fmt.Errorf("%w: advisory lock: %v", ErrAcquire, err)
+		}
+		if held {
+			break
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%w: another owner holds the lock", ErrAcquire)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: %v", ErrAcquire, ctx.Err())
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
 	epoch, acquiredAt, err := BumpEpoch(ctx, conn, instance)
 	if err != nil {

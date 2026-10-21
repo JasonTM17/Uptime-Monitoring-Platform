@@ -40,7 +40,7 @@ func TestReserveRun(t *testing.T) {
 	conn := engineConn(t)
 	ownerID, monID := seedDue(t)
 
-	r1, err := ReserveRun(ctx, conn, monID, caps, 7)
+	r1, err := ReserveRun(ctx, conn, monID, 1, caps, 7)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestReserveRun(t *testing.T) {
 
 	// A second reserve while the first is active is refused - one
 	// in-flight run per monitor; sequence resumes after finalize.
-	if _, err := ReserveRun(ctx, conn, monID, caps, 7); !errors.Is(err, ErrActiveRun) {
+	if _, err := ReserveRun(ctx, conn, monID, 1, caps, 7); !errors.Is(err, ErrActiveRun) {
 		t.Fatalf("active-run guard missing: %v", err)
 	}
 	if _, err := conn.Exec(ctx,
@@ -77,7 +77,12 @@ func TestReserveRun(t *testing.T) {
 		r1.RunID); err != nil {
 		t.Fatal(err)
 	}
-	r2, err := ReserveRun(ctx, conn, monID, caps, 7)
+	if _, err := conn.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := ReserveRun(ctx, conn, monID, 1, caps, 7)
 	if err != nil {
 		t.Fatalf("reserve after finalize: %v", err)
 	}
@@ -92,14 +97,14 @@ func TestAdmissionWindowFull(t *testing.T) {
 	_, monID := seedDue(t)
 	tight := AdmissionCaps{OwnerPer60s: 1, GlobalPer60s: 100}
 
-	if _, err := ReserveRun(ctx, conn, monID, tight, 1); err != nil {
+	if _, err := ReserveRun(ctx, conn, monID, 1, tight, 1); err != nil {
 		t.Fatalf("first admit: %v", err)
 	}
 	// The SAME monitor's next reservation is blocked... by the window,
 	// even though the schedule allows it.
 	// The window cap is checked before the active-run guard.
-	if _, err := ReserveRun(ctx, conn, monID, tight, 1); !errors.Is(err, ErrAdmissionFull) {
-		t.Fatalf("expected ErrAdmissionFull, got %v", err)
+	if _, err := ReserveRun(ctx, conn, monID, 1, tight, 1); !errors.Is(err, ErrOwnerAdmissionFull) {
+		t.Fatalf("expected ErrOwnerAdmissionFull, got %v", err)
 	}
 	// After finalizing the active run the cap still bites: the
 	// committed reservation keeps counting in the 60s window (F02).
@@ -108,13 +113,18 @@ func TestAdmissionWindowFull(t *testing.T) {
 		monID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReserveRun(ctx, conn, monID, tight, 1); !errors.Is(err, ErrAdmissionFull) {
-		t.Fatalf("expected ErrAdmissionFull after finalize, got %v", err)
+	if _, err := conn.Exec(ctx,
+		`UPDATE uptime.monitors SET next_check_at=now()-interval '1 second'
+		  WHERE id=$1`, monID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReserveRun(ctx, conn, monID, 1, tight, 1); !errors.Is(err, ErrOwnerAdmissionFull) {
+		t.Fatalf("expected ErrOwnerAdmissionFull after finalize, got %v", err)
 	}
 	// A DIFFERENT owner's monitor is still governed by the global cap.
 	_, mon2 := seedDue(t)
 	glob := AdmissionCaps{OwnerPer60s: 100, GlobalPer60s: 1}
-	if _, err := ReserveRun(ctx, conn, mon2, glob, 1); !errors.Is(err, ErrAdmissionFull) {
+	if _, err := ReserveRun(ctx, conn, mon2, 1, glob, 1); !errors.Is(err, ErrAdmissionFull) {
 		t.Fatalf("global cap not enforced: %v", err)
 	}
 	// Rolled-back admissions do NOT charge --- only the one commit counts.
@@ -136,7 +146,7 @@ func TestNotAdmittableNoCharge(t *testing.T) {
 		`UPDATE uptime.monitors SET is_paused=true WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReserveRun(ctx, conn, monID, caps, 1); !errors.Is(err, ErrMonitorNotDue) {
+	if _, err := ReserveRun(ctx, conn, monID, 1, caps, 1); !errors.Is(err, ErrMonitorNotDue) {
 		t.Fatalf("paused monitor admitted: %v", err)
 	}
 	var n int
@@ -155,7 +165,7 @@ func TestGenerationFences(t *testing.T) {
 	conn := engineConn(t)
 	_, monID := seedDue(t)
 
-	r1, err := ReserveRun(ctx, conn, monID, caps, 2)
+	r1, err := ReserveRun(ctx, conn, monID, 1, caps, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,10 +177,11 @@ func TestGenerationFences(t *testing.T) {
 	// A mutation bumps generation --- the next reserve must close the
 	// stale segment and open one under the new generation.
 	if _, err := conn.Exec(ctx,
-		`UPDATE uptime.monitors SET generation=generation+1 WHERE id=$1`, monID); err != nil {
+		`UPDATE uptime.monitors SET generation=generation+1,
+		   next_check_at=now()-interval '1 second' WHERE id=$1`, monID); err != nil {
 		t.Fatal(err)
 	}
-	r2, err := ReserveRun(ctx, conn, monID, caps, 3)
+	r2, err := ReserveRun(ctx, conn, monID, 2, caps, 3)
 	if err != nil {
 		t.Fatalf("reserve under new generation: %v", err)
 	}
@@ -193,13 +204,13 @@ func TestReconcileInterrupted(t *testing.T) {
 	conn := engineConn(t)
 	_, monID := seedDue(t)
 
-	old, err := ReserveRun(ctx, conn, monID, caps, 2)
+	old, err := ReserveRun(ctx, conn, monID, 1, caps, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The same-epoch run needs its own monitor - one active per monitor.
 	_, monB := seedDue(t)
-	same, err := ReserveRun(ctx, conn, monB, caps, 3)
+	same, err := ReserveRun(ctx, conn, monB, 1, caps, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

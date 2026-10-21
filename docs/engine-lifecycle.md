@@ -40,7 +40,7 @@ SelectDue (bounded, next_check_at <= now, no active run, not paused/deleted)
 | Queue full | Due monitors stay in the database; nothing is reserved, nothing is lost. Retained work is admitted when capacity returns, exactly once. |
 | Job waits in queue longer than its timeout | Attempt still gets its full configured budget — queue delay cannot produce a failure outcome, an incident, or an outbox intent. A genuinely slow target still produces an eligible `TIMEOUT`. |
 | Cancel before attempt | Zero network I/O, no observation; the reservation stays `RESERVED` and recoverable. |
-| Commit ambiguity (conn dies mid-finalize) | Nothing partial persists; the run stays `RESERVED` and a revalidation/retry commits exactly once. |
+| Finalize fails or commit is ambiguous (conn dies mid-finalize) | Nothing partial persists. The coordinator makes one best-effort `STALE` mark — a no-op if the commit actually landed, otherwise it frees the monitor's one-active slot so a finalize defect can never wedge the monitor. The failure is recorded on `Engine.LastErr()`. |
 | Result replay | Unique `check_id` plus terminal disposition fence: duplicate changes nothing. |
 
 ## Invariants

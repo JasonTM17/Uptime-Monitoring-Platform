@@ -110,7 +110,7 @@ func TestMutationFinalizeSchedules(t *testing.T) {
 			w := NewWriter(o, time.Minute)
 
 			userID, monID := seedDue(t)
-			res, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+			res, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 			if err != nil {
 				t.Fatalf("reserve: %v", err)
 			}
@@ -153,7 +153,7 @@ func TestMutationFinalizeSchedules(t *testing.T) {
 		w := NewWriter(o, time.Minute)
 
 		userID, monID := seedDue(t)
-		res, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+		res, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 		if err != nil {
 			t.Fatalf("reserve: %v", err)
 		}
@@ -203,7 +203,7 @@ func TestMutationFinalizeSchedules(t *testing.T) {
 		w := NewWriter(o, time.Minute)
 
 		userID, monID := seedDue(t)
-		resOld, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+		resOld, err := ReserveRun(ctx, conn, monID, 1, caps, o.Epoch())
 		if err != nil {
 			t.Fatalf("reserve old: %v", err)
 		}
@@ -228,7 +228,7 @@ func TestMutationFinalizeSchedules(t *testing.T) {
 		if err != nil || out != FinalizeStale {
 			t.Fatalf("late old-gen result: %v %v", out, err)
 		}
-		resNew, err := ReserveRun(ctx, conn, monID, caps, o.Epoch())
+		resNew, err := ReserveRun(ctx, conn, monID, 2, caps, o.Epoch())
 		if err != nil {
 			t.Fatalf("reserve new gen: %v", err)
 		}

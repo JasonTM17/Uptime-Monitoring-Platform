@@ -91,7 +91,7 @@ func NewObservation(t Target, outcome Outcome, status *int,
 			return Observation{}, errors.New("failure outcome must not carry a status")
 		}
 	}
-	// Every evidence outcome carries latency � time-to-answer for
+	// Every evidence outcome carries latency  -  time-to-answer for
 	// status outcomes, time-to-failure for eligible failures. Only
 	// exclusions may leave it nil (canceled work measures nothing).
 	if outcome.IsEligible() && latencyMs == nil {
