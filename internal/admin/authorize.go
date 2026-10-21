@@ -101,6 +101,18 @@ func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 		WHERE user_id=$1 FOR SHARE`, userID); err != nil {
 		return nil, err
 	}
+	// Same pin on the permission side of the join: a role-permission
+	// edit that bypasses the holder-epoch fanout (naive bypass) is a
+	// delete on this table — share-locking the actor's effective
+	// grant rows closes the same mid-tx window one table deeper.
+	if _, err := tx.Exec(ctx, `
+		SELECT rp.role_id, rp.permission_id
+		FROM uptime.role_permissions rp
+		WHERE rp.role_id IN (
+		  SELECT role_id FROM uptime.user_roles WHERE user_id=$1)
+		FOR SHARE OF rp`, userID); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT rp.permission_id
 		FROM uptime.user_roles ur

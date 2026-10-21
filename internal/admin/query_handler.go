@@ -39,6 +39,24 @@ func (h *RolesHandler) overview(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, out)
 }
 
+// rejectUnknownParams 400s on any query key outside the route's
+// declared filter set — an unrecognized filter must never be
+// silently ignored (the spec's unknown-filter rule).
+func rejectUnknownParams(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	set := map[string]bool{}
+	for _, a := range allowed {
+		set[a] = true
+	}
+	for k := range r.URL.Query() {
+		if !set[k] {
+			httpserver.WriteError(w, r, http.StatusBadRequest,
+				httpserver.ErrBadRequest, "unknown filter: "+k)
+			return true
+		}
+	}
+	return false
+}
+
 func parseLimit(r *http.Request) int {
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -49,6 +67,9 @@ func parseLimit(r *http.Request) int {
 }
 
 func (h *RolesHandler) listUsers(w http.ResponseWriter, r *http.Request) {
+	if rejectUnknownParams(w, r, "q", "status", "role_id", "limit", "cursor") {
+		return
+	}
 	p, _ := auth.PrincipalFromContext(r.Context())
 	q := r.URL.Query()
 	rows, next, err := ListUsers(r.Context(), h.conn, actorRef(p), UsersFilter{
@@ -84,6 +105,9 @@ func (h *RolesHandler) getUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RolesHandler) listMonitors(w http.ResponseWriter, r *http.Request) {
+	if rejectUnknownParams(w, r, "owner_id", "paused", "health", "limit", "cursor") {
+		return
+	}
 	p, _ := auth.PrincipalFromContext(r.Context())
 	q := r.URL.Query()
 	rows, next, err := ListGlobalMonitors(r.Context(), h.conn, actorRef(p),
@@ -114,6 +138,9 @@ func (h *RolesHandler) operations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RolesHandler) listOutbox(w http.ResponseWriter, r *http.Request) {
+	if rejectUnknownParams(w, r, "state", "limit", "cursor") {
+		return
+	}
 	p, _ := auth.PrincipalFromContext(r.Context())
 	q := r.URL.Query()
 	rows, next, err := ListOutbox(r.Context(), h.conn, actorRef(p), OutboxFilter{
@@ -131,6 +158,9 @@ func (h *RolesHandler) listOutbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RolesHandler) listAudit(w http.ResponseWriter, r *http.Request) {
+	if rejectUnknownParams(w, r, "action", "actor", "subject", "from", "to", "limit", "cursor") {
+		return
+	}
 	p, _ := auth.PrincipalFromContext(r.Context())
 	q := r.URL.Query()
 	rows, next, err := ListAuditEvents(r.Context(), h.conn, actorRef(p),

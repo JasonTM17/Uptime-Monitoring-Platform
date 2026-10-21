@@ -143,6 +143,33 @@ func TestAdminQueryPagination(t *testing.T) {
 	if !errors.Is(err, admin.ErrValidation) {
 		t.Fatalf("unbounded window: want ErrValidation, got %v", err)
 	}
+
+	// Audit keyset across pages: no duplicates, strictly descending —
+	// the equal-timestamp tiebreak must never skip a row either.
+	seenA := map[uuid.UUID]bool{}
+	cursor = ""
+	var prevKey time.Time
+	for pages := 0; pages < 20; pages++ {
+		rows, next, err := admin.ListAuditEvents(ctx, conn, actor,
+			admin.AuditFilter{Limit: 2, Cursor: cursor}, now)
+		if err != nil {
+			t.Fatalf("audit page %d: %v", pages, err)
+		}
+		for _, a := range rows {
+			if seenA[a.ID] {
+				t.Fatalf("audit dup across pages: %s", a.ID)
+			}
+			seenA[a.ID] = true
+			if !prevKey.IsZero() && a.CreatedAt.After(prevKey) {
+				t.Fatal("audit rows not descending")
+			}
+			prevKey = a.CreatedAt
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
 }
 
 func TestAdminRedaction(t *testing.T) {

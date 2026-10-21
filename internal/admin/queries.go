@@ -318,6 +318,7 @@ type MonitorRow struct {
 	Generation    int64      `json:"generation"`
 	LastCheckedAt *time.Time `json:"last_checked_at"`
 	NextCheckAt   time.Time  `json:"next_check_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // MonitorsFilter bounds the global monitor page.
@@ -378,21 +379,20 @@ func ListGlobalMonitors(ctx context.Context, conn Beginner,
 			for rs.Next() {
 				var m MonitorRow
 				var raw string
-				var created time.Time
 				if err := rs.Scan(&m.ID, &m.OwnerID, &m.Name, &raw,
 					&m.Health, &m.IsPaused, &m.Generation,
-					&m.LastCheckedAt, &m.NextCheckAt, &created); err != nil {
+					&m.LastCheckedAt, &m.NextCheckAt, &m.CreatedAt); err != nil {
 					return err
 				}
 				m.Target = redactTargetHost(raw)
 				rows = append(rows, m)
-				ks = keyset{Key: created, ID: m.ID, FHash: fh}
 			}
 			return rs.Err()
 		})
 	if len(rows) > limit {
+		last := rows[limit-1]
 		rows = rows[:limit]
-		next = encodeCursor(ks)
+		next = encodeCursor(keyset{Key: last.CreatedAt, ID: last.ID, FHash: fh})
 	}
 	if err != nil && isConnError(err) {
 		return nil, "", ErrUnavailable
@@ -562,13 +562,13 @@ func ListOutbox(ctx context.Context, conn Beginner, actor ActorRef,
 					return err
 				}
 				rows = append(rows, o)
-				ks = keyset{Key: o.CreatedAt, ID: o.ID, FHash: fh}
 			}
 			return rs.Err()
 		})
 	if len(rows) > limit {
+		last := rows[limit-1]
 		rows = rows[:limit]
-		next = encodeCursor(ks)
+		next = encodeCursor(keyset{Key: last.CreatedAt, ID: last.ID, FHash: fh})
 	}
 	if err != nil && isConnError(err) {
 		return nil, "", ErrUnavailable
@@ -675,13 +675,13 @@ func ListAuditEvents(ctx context.Context, conn Beginner, actor ActorRef,
 					return err
 				}
 				rows = append(rows, a)
-				ks = keyset{Key: a.CreatedAt, ID: a.ID, FHash: fh}
 			}
 			return rs.Err()
 		})
 	if len(rows) > limit {
+		last := rows[limit-1]
 		rows = rows[:limit]
-		next = encodeCursor(ks)
+		next = encodeCursor(keyset{Key: last.CreatedAt, ID: last.ID, FHash: fh})
 	}
 	if err != nil && isConnError(err) {
 		return nil, "", ErrUnavailable
