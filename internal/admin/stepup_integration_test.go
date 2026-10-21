@@ -42,8 +42,8 @@ func TestPrivilegedIdempotency(t *testing.T) {
 	key := "idem-key-" + uuid.NewString()[:8]
 	body := []byte(`{"version":1}`)
 
-	effect := func(marker string) func(pgx.Tx, map[string]bool) (admin.PrivilegedResult, error) {
-		return func(tx pgx.Tx, _ map[string]bool) (admin.PrivilegedResult, error) {
+	effect := func(marker string) func(pgx.Tx, []admin.LockedUser, map[string]bool) (admin.PrivilegedResult, error) {
+		return func(tx pgx.Tx, _ []admin.LockedUser, _ map[string]bool) (admin.PrivilegedResult, error) {
 			if err := admin.AppendAudit(ctx, tx, admin.AuditEvent{
 				ActorID:   uuid.NullUUID{UUID: actor.UserID, Valid: true},
 				ActorKind: admin.ActorUser, Action: "test.effect",
@@ -150,7 +150,7 @@ func TestPrivilegedReplayAfterVersionAdvance(t *testing.T) {
 	// Effect advances the monitor-agnostic "version" in the response
 	// body — the body hash differs only by version, same key.
 	var version int64 = 5
-	fn := func(tx pgx.Tx, _ map[string]bool) (admin.PrivilegedResult, error) {
+	fn := func(tx pgx.Tx, _ []admin.LockedUser, _ map[string]bool) (admin.PrivilegedResult, error) {
 		version++
 		return admin.PrivilegedResult{
 			Status:   200,
@@ -202,7 +202,7 @@ func TestRecentAuthRejectsForeignReceipt(t *testing.T) {
 	_, err := admin.WithIdempotentPrivilegedTx(ctx, conn, actor,
 		"platform:read", "test.effect", "t3", "k-"+uuid.NewString()[:8],
 		[]byte(`{}`), nil, time.Now(),
-		func(pgx.Tx, map[string]bool) (admin.PrivilegedResult, error) {
+		func(pgx.Tx, []admin.LockedUser, map[string]bool) (admin.PrivilegedResult, error) {
 			return admin.PrivilegedResult{Status: 200, Response: map[string]any{}}, nil
 		})
 	if !errors.Is(err, admin.ErrReauthRequired) {

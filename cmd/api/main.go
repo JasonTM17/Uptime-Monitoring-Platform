@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/admin"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/analytics"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
@@ -122,6 +123,13 @@ func run() error {
 		Profile:             anaProfile,
 	})
 	anaHandler := analytics.NewHandler(anaSvc, svc, log)
+
+	// Admin: role catalog + bounded role mutations (C59). The handler
+	// re-derives authorization under the security anchor — the session
+	// principal is only a snapshot. The shared pool conn is safe: every
+	// privileged recipe runs inside one transaction.
+	adminHandler := admin.NewRolesHandler(pool, svc, csrfMgr,
+		cfg.HTTP.MaxJSONBodyBytes, log)
 
 	// Engine: dedicated owner conn + assembled lifecycle. A start
 	// failure is NOT fatal — another instance may legitimately hold
@@ -281,7 +289,8 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors/{id}/checks", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/monitors/{id}/incidents", Handler: anaHandler.Mux()},
 		httpserver.Mount{Pattern: "/monitors/{id}/stats", Handler: anaHandler.Mux()},
-		httpserver.Mount{Pattern: "/dashboard/", Handler: anaHandler.Mux()})
+		httpserver.Mount{Pattern: "/dashboard/", Handler: anaHandler.Mux()},
+		httpserver.Mount{Pattern: "/admin/", Handler: adminHandler.Mux()})
 	err = srv.Run(ctx)
 	// HTTP drained first. Then the delivery loops stop accepting
 	// work — the dispatcher's own in-flight send finishes inside

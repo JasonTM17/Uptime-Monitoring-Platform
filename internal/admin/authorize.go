@@ -73,7 +73,12 @@ func LockUsers(ctx context.Context, tx pgx.Tx, ids ...uuid.UUID) ([]LockedUser, 
 		return sorted[i].String() < sorted[j].String()
 	})
 	out := make([]LockedUser, 0, len(sorted))
+	var prev uuid.UUID
 	for _, id := range sorted {
+		if len(out) > 0 && id == prev {
+			continue // actor may also appear in targets
+		}
+		prev = id
 		u, err := LockUser(ctx, tx, id)
 		if err != nil {
 			return nil, err
@@ -107,6 +112,13 @@ func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 	return out, rows.Err()
 }
 
+// Beginner is the transaction seam both *pgx.Conn and *pgxpool.Pool
+// satisfy — services stay conn-agnostic so tests can inject a single
+// dedicated conn while production wiring uses the shared pool.
+type Beginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // WithPrivilegedTx is the privileged-mutation guard: one transaction
 // that serializes on the anchor, re-verifies the actor (ACTIVE user,
 // live session, matching security epoch, required permission) under
@@ -118,7 +130,7 @@ func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 // ordering never depends on the middleware snapshot.
 //
 // Callers must not perform network I/O inside fn.
-func WithPrivilegedTx(ctx context.Context, conn *pgx.Conn,
+func WithPrivilegedTx(ctx context.Context, conn Beginner,
 	actor ActorRef, permission string, now time.Time,
 	fn func(tx pgx.Tx, perms map[string]bool) error) error {
 	return withPrivilegedTxUsers(ctx, conn, actor, nil, permission, now,
@@ -131,7 +143,7 @@ func WithPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 // touch subject user rows: every user — actor first in the predicate
 // sense — is locked in ascending UUID order inside one transaction.
 // fn additionally receives the locked subject rows (actor excluded).
-func WithPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
+func WithPrivilegedTxUsers(ctx context.Context, conn Beginner,
 	actor ActorRef, targets []uuid.UUID, permission string, now time.Time,
 	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error) error {
 	return withPrivilegedTxUsers(ctx, conn, actor, targets, permission, now, fn)
@@ -140,7 +152,7 @@ func WithPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
 // withPrivilegedTxUsers is the shared implementation. Subjects are
 // locked together with the actor in ascending order so the global
 // lock order (anchor → users asc → …) is never violated.
-func withPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
+func withPrivilegedTxUsers(ctx context.Context, conn Beginner,
 	actor ActorRef, targets []uuid.UUID, permission string, now time.Time,
 	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error) error {
 
@@ -160,10 +172,17 @@ func withPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
 	}
 	var u LockedUser
 	var subjects []LockedUser
+	wantSubject := map[uuid.UUID]bool{}
+	for _, t := range targets {
+		wantSubject[t] = true
+	}
 	for _, lu := range locked {
 		if lu.ID == actor.UserID {
 			u = lu
-		} else {
+		}
+		// The actor may also be a target — self-demotion is the very
+		// path the last-superadmin guard exists for.
+		if wantSubject[lu.ID] {
 			subjects = append(subjects, lu)
 		}
 	}
@@ -205,3 +224,61 @@ func withPrivilegedTxUsers(ctx context.Context, conn *pgx.Conn,
 	}
 	return tx.Commit(ctx)
 }
+
+// AuthorizeRead is the read-path guard: the actor's user row is
+// locked and the same session/epoch/permission predicates rechecked,
+// but the security anchor is NOT taken — reads must not serialize
+// against privileged writes. The fn result is committed unchanged
+// (a read fn that mutates is a bug, not a contract).
+func AuthorizeRead(ctx context.Context, conn Beginner,
+	actor ActorRef, permission string, now time.Time,
+	fn func(tx pgx.Tx, perms map[string]bool) error) error {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	u, err := LockUser(ctx, tx, actor.UserID)
+	if err != nil {
+		return err
+	}
+	if u.Status != "ACTIVE" || u.SecurityVersion != actor.SecurityVersion {
+		return ErrActorRevoked
+	}
+	var revokedAt *time.Time
+	var expiresAt, idleExpiresAt time.Time
+	var owner uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT user_id, revoked_at, expires_at, idle_expires_at
+		FROM uptime.sessions WHERE id=$1 FOR UPDATE`, actor.SessionID).
+		Scan(&owner, &revokedAt, &expiresAt, &idleExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrActorRevoked
+	}
+	if err != nil {
+		return err
+	}
+	if owner != actor.UserID || revokedAt != nil ||
+		!now.Before(expiresAt) || !now.Before(idleExpiresAt) {
+		return ErrActorRevoked
+	}
+	perms, err := LoadEffectivePermissions(ctx, tx, actor.UserID)
+	if err != nil {
+		return err
+	}
+	if !perms[permission] {
+		return ErrForbidden
+	}
+	if err := fn(tx, perms); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ValidationError carries bounded field details for 422 responses —
+// e.g. the missing_permissions list a custom role needs.
+type ValidationError struct {
+	Fields map[string]any
+}
+
+func (e *ValidationError) Error() string { return "validation failed" }

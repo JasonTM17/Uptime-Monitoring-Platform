@@ -92,6 +92,15 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 		}
 		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "could not read request body"}
 	}
+	return DecodeBodyBytes(body, dst)
+}
+
+// DecodeBodyBytes validates and decodes an already-read JSON body with
+// the same rules DecodeJSON applies after transport checks — required
+// body, strict fields, single value, no duplicate top-level keys.
+// Handlers that need the raw bytes (e.g. idempotency body hashing)
+// read the body themselves and call this instead.
+func DecodeBodyBytes(body []byte, dst any) *APIError {
 	if len(body) == 0 {
 		return &APIError{Status: http.StatusBadRequest, Code: ErrBadRequest, Msg: "request body required"}
 	}

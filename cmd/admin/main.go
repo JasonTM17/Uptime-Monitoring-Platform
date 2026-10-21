@@ -59,7 +59,7 @@ as a flag; every operation is anchor-locked, audited and idempotent.`)
 	}
 }
 
-func operate(args []string, fn func(context.Context, *pgx.Conn, string, string, string) error) error {
+func operate(args []string, fn func(context.Context, admin.Beginner, string, string, string) error) error {
 	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
 	email := fs.String("email", "", "email of an existing ACTIVE user")
 	reason := fs.String("reason", "", "operator reason recorded in audit (required)")

@@ -29,7 +29,7 @@ const superAdminRoleID = "00000000-0000-4000-8000-000000000005"
 // SUPER_ADMIN exists (counted under the anchor lock, so a concurrent
 // demote cannot slip past the check), never creates a user, and
 // never runs at process startup.
-func BootstrapSuperAdmin(ctx context.Context, conn *pgx.Conn, email, reason, requestID string) error {
+func BootstrapSuperAdmin(ctx context.Context, conn Beginner, email, reason, requestID string) error {
 	reason = strings.TrimSpace(reason)
 	if len(reason) == 0 || len(reason) > maxAuditReason {
 		return ErrReasonRequired
@@ -93,7 +93,7 @@ func BootstrapSuperAdmin(ctx context.Context, conn *pgx.Conn, email, reason, req
 // the target holds (authority changes must re-authenticate) and
 // bumps the security version, all inside the anchor-locked
 // transaction with its audit row.
-func RecoverAdministrativeAccess(ctx context.Context, conn *pgx.Conn, email, reason, requestID string) error {
+func RecoverAdministrativeAccess(ctx context.Context, conn Beginner, email, reason, requestID string) error {
 	reason = strings.TrimSpace(reason)
 	if len(reason) == 0 || len(reason) > maxAuditReason {
 		return ErrReasonRequired

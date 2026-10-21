@@ -70,10 +70,10 @@ type PrivilegedResult struct {
 //  4. same key + different hash → 409
 //  5. absent → run fn (business guards, mutation, audit), persist the
 //     sanitized response, commit — exactly one SUCCESS record
-func WithIdempotentPrivilegedTx(ctx context.Context, conn *pgx.Conn,
+func WithIdempotentPrivilegedTx(ctx context.Context, conn Beginner,
 	actor ActorRef, permission, action, targetID, idemKey string,
 	body []byte, targets []uuid.UUID, now time.Time,
-	fn func(tx pgx.Tx, perms map[string]bool) (PrivilegedResult, error)) (PrivilegedResult, error) {
+	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) (PrivilegedResult, error)) (PrivilegedResult, error) {
 
 	if len(idemKey) == 0 || len(idemKey) > MaxIdempotencyKey {
 		return PrivilegedResult{}, fmt.Errorf("%w: idempotency key length", ErrValidation)
@@ -83,7 +83,7 @@ func WithIdempotentPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 
 	var out PrivilegedResult
 	err := withPrivilegedTxUsers(ctx, conn, actor, targets, permission, now,
-		func(tx pgx.Tx, _ []LockedUser, perms map[string]bool) error {
+		func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error {
 			if err := RequireRecentAuth(ctx, tx, actor.SessionID, now); err != nil {
 				return err
 			}
@@ -113,7 +113,7 @@ func WithIdempotentPrivilegedTx(ctx context.Context, conn *pgx.Conn,
 				return err
 			}
 
-			res, err := fn(tx, perms)
+			res, err := fn(tx, subjects, perms)
 			if err != nil {
 				return err
 			}

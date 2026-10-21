@@ -1004,8 +1004,109 @@ paths:
                   fields: { missing_permissions: "users.read, quota.write" }
                 request_id: "req_01H…"
 
+  /admin/roles:
+    get:
+      tags: [admin]
+      summary: Role + permission catalog with delegation ceiling
+      operationId: listAdminRoles
+      responses:
+        '200':
+          description: Catalog, presets, custom roles, ceiling, requires
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin]
+      summary: Create a bounded custom role (SUPER_ADMIN only)
+      operationId: createAdminRole
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Role created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: missing_permissions (unmet read prerequisites) or over-ceiling grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: validation failed
+                  fields: { missing_permissions: "users:read" }
+                request_id: "req_01H…"
+
+  /admin/roles/{id}:
+    patch:
+      tags: [admin]
+      summary: Replace a custom role's grant set (presets immutable)
+      operationId: updateAdminRole
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Role updated; every holder's security epoch advanced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/users/{id}/roles:
+    put:
+      tags: [admin]
+      summary: Replace one user's role set atomically
+      operationId: assignUserRoles
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Role set replaced; subject security epoch advanced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/AdminForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Stale expected_version, conflicting idempotency key, or LAST_SUPERADMIN
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error:
+                  code: LAST_SUPERADMIN
+                  message: the last active superadmin cannot be removed
+                request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
 components:
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Privileged-mutation idempotency key (max 128 bytes). Binds the
+        actor, action, target and request-body hash — same key with a
+        different body returns 409.
+      schema: { type: string, maxLength: 128 }
     IdPath:
       name: id
       in: path
@@ -1342,6 +1443,30 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
           example:
             error: { code: FORBIDDEN, message: insufficient permissions }
+            request_id: "req_01H…"
+    ValidationFailed:
+      description: Bounded field validation failure
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: VALIDATION_ERROR, message: validation failed }
+            request_id: "req_01H…"
+    Conflict:
+      description: Stale expected_version or idempotency conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: CONFLICT, message: conflicting or stale version }
+            request_id: "req_01H…"
+    AdminForbidden:
+      description: FORBIDDEN or REAUTH_REQUIRED on a privileged surface
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: REAUTH_REQUIRED, message: recent authentication required }
             request_id: "req_01H…"
     CSRFRejected:
       description: CSRF pair missing/mismatched or Origin rejected
