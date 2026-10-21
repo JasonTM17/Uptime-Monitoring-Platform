@@ -569,6 +569,135 @@ paths:
         '409': { $ref: '#/components/responses/GenerationConflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
+  /monitors/{id}/checks:
+    get:
+      tags: [monitors, history]
+      summary: Page check-run history (newest first, keyset cursor)
+      description: |
+        Owner-scoped run history over the nominal slot grid. `slot_at`
+        is the scheduled slot; `observed_at` is the real observation
+        timestamp — they are separate labels on purpose. Runs without
+        an accepted result carry null outcome fields. Max range 30d.
+      operationId: listMonitorChecks
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: A page of check history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      checks:
+                        type: array
+                        items: { $ref: '#/components/schemas/CheckHistoryRow' }
+                      page: { $ref: '#/components/schemas/Page' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /monitors/{id}/incidents:
+    get:
+      tags: [monitors, history]
+      summary: Page incident history (open or resolved filter)
+      operationId: listMonitorIncidents
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - name: state
+          in: query
+          schema: { type: string, enum: [open, resolved] }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: A page of incidents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      incidents:
+                        type: array
+                        items: { $ref: '#/components/schemas/IncidentRow' }
+                      page: { $ref: '#/components/schemas/Page' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /monitors/{id}/stats:
+    get:
+      tags: [monitors, statistics]
+      summary: Weighted sampled statistics over a fixed window
+      description: |
+        `window_start/end` echo the REQUEST; `data_start/end` are the
+        REPRESENTED half-open interval — every count, ratio and the
+        denominator share it. Ratios are null with no evidence; a
+        truncated window sets `is_partial`. Hourly aggregates merge
+        with uncovered raw slots; nothing double-counts and no
+        percentages are averaged.
+      operationId: getMonitorStats
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - name: window
+          in: query
+          schema: { type: string, enum: [24h, 7d, 30d], default: 24h }
+      responses:
+        '200':
+          description: Sampled statistics projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/MonitorStats' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Owner dashboard snapshot with authoritative quota
+      description: |
+        One consistent read: monitor counts, open incidents, the
+        bounded recent-incident strip, 24h weighted sampled uptime,
+        and the own quota projection — `used` counts every nondeleted
+        monitor of the caller regardless of filters.
+      operationId: getDashboardSummary
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/DashboardSummary' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
   /notification-channels:
     post:
       tags: [notification-channels]
@@ -817,6 +946,115 @@ components:
       schema: { type: string }
 
   schemas:
+    Page:
+      type: object
+      properties:
+        next_cursor: { type: string }
+        has_more: { type: boolean }
+    CheckHistoryRow:
+      type: object
+      description: Run lifecycle plus accepted result; slot_at is the
+        nominal slot, observed_at the real timestamp.
+      properties:
+        run_id: { type: string, format: uuid }
+        slot_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        status:
+          type: string
+          enum: [RESERVED, RUNNING, COMPLETED, EXCLUDED, INTERRUPTED, STALE]
+        outcome: { type: [string, "null"] }
+        eligible: { type: [boolean, "null"] }
+        success: { type: [boolean, "null"] }
+        http_status: { type: [integer, "null"], minimum: 100, maximum: 599 }
+        duration_ms: { type: [integer, "null"], minimum: 0 }
+        observed_at: { type: [string, "null"], format: date-time }
+    IncidentRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        opened_at: { type: string, format: date-time }
+        resolved_at: { type: [string, "null"], format: date-time }
+        close_reason:
+          type: [string, "null"]
+          enum: [RECOVERED, CONFIG_CHANGED, DELETED]
+        opened_check_id: { type: string, format: uuid }
+        resolved_check_id: { type: [string, "null"], format: uuid }
+    MonitorStats:
+      type: object
+      description: |
+        window_start/end are the REQUEST; data_start/end the
+        REPRESENTED interval. Counts/coverage/latency all share the
+        represented bounds; null ratios mean no evidence.
+      properties:
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        data_start: { type: [string, "null"], format: date-time }
+        data_end: { type: [string, "null"], format: date-time }
+        valid_samples: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        excluded_samples: { type: integer, minimum: 0 }
+        expected_samples: { type: integer, minimum: 0 }
+        missed_samples: { type: integer, minimum: 0 }
+        pending_samples: { type: integer, minimum: 0 }
+        coverage: { type: [number, "null"], minimum: 0, maximum: 1 }
+        sample_uptime: { type: [number, "null"], minimum: 0, maximum: 1 }
+        avg_duration_ms: { type: [number, "null"], minimum: 0 }
+        raw_retention_hours: { type: integer }
+        hourly_retention_days: { type: integer }
+        raw_available_from: { type: [string, "null"], format: date-time }
+        resolution:
+          type: string
+          enum: [raw, hourly, mixed, none]
+        is_partial: { type: boolean }
+        series:
+          type: array
+          items: { $ref: '#/components/schemas/StatsBucket' }
+    StatsBucket:
+      type: object
+      properties:
+        bucket_start: { type: string, format: date-time }
+        valid_samples: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        excluded_samples: { type: integer, minimum: 0 }
+        sample_uptime: { type: [number, "null"], minimum: 0, maximum: 1 }
+        avg_duration_ms: { type: [number, "null"], minimum: 0 }
+    DashboardSummary:
+      type: object
+      properties:
+        monitors: { type: integer, minimum: 0 }
+        active: { type: integer, minimum: 0 }
+        paused: { type: integer, minimum: 0 }
+        up: { type: integer, minimum: 0 }
+        down: { type: integer, minimum: 0 }
+        open_incidents: { type: integer, minimum: 0 }
+        sample_uptime_24h: { type: [number, "null"], minimum: 0, maximum: 1 }
+        recent_incidents:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              monitor_id: { type: string, format: uuid }
+              monitor_name: { type: string }
+              opened_at: { type: string, format: date-time }
+              resolved_at: { type: [string, "null"], format: date-time }
+              close_reason: { type: [string, "null"] }
+        quota:
+          type: object
+          required: [used, active, paused, limit, profile, as_of, source]
+          properties:
+            used: { type: integer, minimum: 0 }
+            active: { type: integer, minimum: 0 }
+            paused: { type: integer, minimum: 0 }
+            limit: { type: integer, minimum: 0 }
+            profile: { type: string, enum: [local, hosted-free] }
+            as_of: { type: string, format: date-time }
+            source: { type: string, enum: [server] }
+        as_of: { type: string, format: date-time }
     DataEnvelope:
       type: object
       description: Success wrapper — payload under `data`.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/analytics"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/engine"
@@ -104,6 +105,23 @@ func run() error {
 		Logger:      log,
 	})
 
+	// Analytics: owner-scoped history/stats/dashboard reads (C50).
+	// Retention contract: local keeps raw 30d, hosted-free 24h;
+	// hourly aggregates keep 30d in both profiles.
+	anaProfile := "local"
+	rawHours := 30 * 24
+	if cfg.Profile == config.ProfileHosted {
+		anaProfile = "hosted-free"
+		rawHours = 24
+	}
+	anaRepo := analytics.NewRepository(pool, cfg.Database.QueryTimeout)
+	anaSvc := analytics.NewService(anaRepo, analytics.ServiceConfig{
+		RawRetentionHours:   rawHours,
+		HourlyRetentionDays: 30,
+		Profile:             anaProfile,
+	})
+	anaHandler := analytics.NewHandler(anaSvc, svc, log)
+
 	// Engine: dedicated owner conn + assembled lifecycle. A start
 	// failure is NOT fatal — another instance may legitimately hold
 	// the advisory lock, and the API still serves. When an engine
@@ -148,7 +166,12 @@ func run() error {
 		httpserver.Mount{Pattern: "/monitors", Handler: monHandler.Mux()},
 		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()},
 		httpserver.Mount{Pattern: "/notification-channels", Handler: chanHandler.Mux()},
-		httpserver.Mount{Pattern: "/notification-channels/", Handler: chanHandler.Mux()})
+		httpserver.Mount{Pattern: "/notification-channels/", Handler: chanHandler.Mux()},
+		// Specific {id} patterns outrank the /monitors/ subtree mount.
+		httpserver.Mount{Pattern: "/monitors/{id}/checks", Handler: anaHandler.Mux()},
+		httpserver.Mount{Pattern: "/monitors/{id}/incidents", Handler: anaHandler.Mux()},
+		httpserver.Mount{Pattern: "/monitors/{id}/stats", Handler: anaHandler.Mux()},
+		httpserver.Mount{Pattern: "/dashboard/", Handler: anaHandler.Mux()})
 	err = srv.Run(ctx)
 	// HTTP drained first, then the engine's own ordered stop:
 	// readiness flips inside Shutdown before its worker/finalize
