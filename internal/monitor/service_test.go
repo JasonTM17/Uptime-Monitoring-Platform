@@ -12,6 +12,7 @@ import (
 
 type fakeStore struct {
 	monitors map[uuid.UUID]Monitor
+	bindings []uuid.UUID
 	created  WriteFields
 	gotGen   int64
 	gotCaps  Caps
@@ -109,6 +110,28 @@ func (f *fakeStore) SetMonitorPausedTx(ctx context.Context, _ pgx.Tx, ownerID, i
 }
 func (f *fakeStore) SoftDeleteMonitorTx(ctx context.Context, _ pgx.Tx, ownerID, id uuid.UUID, gen int64) error {
 	return f.SoftDeleteMonitor(ctx, ownerID, id, gen)
+}
+func (f *fakeStore) ReplaceChannelsTx(ctx context.Context, _ pgx.Tx, ownerID, id uuid.UUID, gen int64, ids []uuid.UUID, eligible ChannelEligibility) (Monitor, error) {
+	m, ok := f.monitors[id]
+	if !ok || m.UserID != ownerID || m.DeletedAt != nil {
+		return Monitor{}, ErrMonitorNotFound
+	}
+	if m.Generation != gen {
+		return Monitor{}, ErrGenerationConflict
+	}
+	ok2, err := eligible(ctx, nil, ownerID, ids)
+	if err != nil {
+		return Monitor{}, err
+	}
+	for _, cid := range ids {
+		if !ok2[cid] {
+			return Monitor{}, ErrChannelIneligible
+		}
+	}
+	m.Generation++
+	f.monitors[id] = m
+	f.bindings = ids
+	return m, nil
 }
 
 var validFields = WriteFields{

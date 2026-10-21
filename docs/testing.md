@@ -30,8 +30,13 @@ TEST_DATABASE_URL="postgres://uptime_test:<pw>@127.0.0.1:54330/uptime_test?sslmo
 Behavioral coverage includes: migration roundtrip, repository error
 mapping, concurrent canonical-email registration (one account), session
 create/lookup/revoke with SHA-256-only storage, owner-scoped inventory
-(foreign → 404-equivalent), and the full HTTP auth flow
-(csrf → register → login → me → sessions → logout) through a real
+(foreign → 404-equivalent), monitor quota fencing and generation races,
+keyset pagination, pause/resume idempotence, notification-channel
+pending/retained caps (tombstoned pending still counted), operator-only
+destination verification (masked output, never browser-writable), and
+atomic monitor→channel binding (ineligible ids fail the whole set,
+same-generation writers elect exactly one), plus the full HTTP auth
+flow (csrf → register → login → me → sessions → logout) through a real
 `httptest` server. Fixture rows use unique emails and are deleted by
 the test — no blanket truncate of unrelated rows.
 

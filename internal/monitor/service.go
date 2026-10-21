@@ -29,6 +29,7 @@ type TxStore interface {
 	UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, expectedGen int64, in WriteFields) (Monitor, error)
 	SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, expectedGen int64, paused bool) (Monitor, error)
 	SoftDeleteMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, expectedGen int64) error
+	ReplaceChannelsTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, expectedGen int64, channelIDs []uuid.UUID, eligible ChannelEligibility) (Monitor, error)
 }
 
 // Service orchestrates validation + persistence. It holds the
@@ -157,6 +158,24 @@ func (s *Service) Delete(ctx context.Context, ownerID, id uuid.UUID, gen int64) 
 
 func (s *Service) DeleteTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID, gen int64) error {
 	return s.tx.SoftDeleteMonitorTx(ctx, tx, ownerID, id, gen)
+}
+
+// BindChannelsTx replaces the monitor's notification-channel set
+// atomically inside the caller's actor lock (F11). Duplicate ids are
+// collapsed before the repo — the composite PK would reject them
+// anyway, but dedup keeps the input contract clean. An empty set is
+// a legitimate full unbind.
+func (s *Service) BindChannelsTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,
+	gen int64, channelIDs []uuid.UUID, eligible ChannelEligibility) (Monitor, error) {
+	seen := map[uuid.UUID]bool{}
+	dedup := channelIDs[:0]
+	for _, cid := range channelIDs {
+		if !seen[cid] {
+			seen[cid] = true
+			dedup = append(dedup, cid)
+		}
+	}
+	return s.tx.ReplaceChannelsTx(ctx, tx, ownerID, id, gen, dedup, eligible)
 }
 
 func (s *Service) Get(ctx context.Context, ownerID, id uuid.UUID) (Monitor, error) {

@@ -18,6 +18,9 @@ type HandlerConfig struct {
 	MaxJSONBody int64
 	CSRF        *auth.CSRFManager // required in production wiring
 	Logger      *slog.Logger      // nil-safe
+	// ChannelEligibility validates bind sets inside the binding
+	// transaction — cmd/api injects notification.EligibleChannelIDs.
+	ChannelEligibility ChannelEligibility
 }
 
 // AuthGate is the authentication+lock seam the handler needs —
@@ -36,11 +39,12 @@ type AuthGate interface {
 // between request start and commit still fails the write — the
 // context principal is only a snapshot.
 type Handler struct {
-	svc     *Service
-	auth    AuthGate
-	csrf    *auth.CSRFManager
-	maxBody int64
-	log     *slog.Logger
+	svc      *Service
+	auth     AuthGate
+	csrf     *auth.CSRFManager
+	maxBody  int64
+	log      *slog.Logger
+	eligible ChannelEligibility
 }
 
 func NewHandler(svc *Service, gate AuthGate, cfg HandlerConfig) *Handler {
@@ -49,7 +53,7 @@ func NewHandler(svc *Service, gate AuthGate, cfg HandlerConfig) *Handler {
 		l = slog.New(slog.DiscardHandler)
 	}
 	return &Handler{svc: svc, auth: gate, csrf: cfg.CSRF,
-		maxBody: cfg.MaxJSONBody, log: l}
+		maxBody: cfg.MaxJSONBody, log: l, eligible: cfg.ChannelEligibility}
 }
 
 // Mux returns the monitor route table. The composition root mounts it
@@ -76,6 +80,7 @@ func (h *Handler) Mux() *http.ServeMux {
 	mux.HandleFunc("DELETE /monitors/{id}", guard(h.del))
 	mux.HandleFunc("POST /monitors/{id}/pause", guard(h.transition(true)))
 	mux.HandleFunc("POST /monitors/{id}/resume", guard(h.transition(false)))
+	mux.HandleFunc("PUT /monitors/{id}/notification-channels", guard(h.bindChannels))
 
 	// Method twins on exact paths keep 405 inside the envelope.
 	for _, path := range []string{"/monitors", "/monitors/{$}"} {
@@ -90,6 +95,10 @@ func (h *Handler) Mux() *http.ServeMux {
 		for _, method := range []string{"GET", "PUT", "PATCH", "DELETE"} {
 			mux.HandleFunc(method+" "+p, h.methodNotAllowed("POST"))
 		}
+	}
+	for _, method := range []string{"GET", "POST", "PATCH", "DELETE"} {
+		mux.HandleFunc(method+" /monitors/{id}/notification-channels",
+			h.methodNotAllowed("PUT"))
 	}
 	mux.HandleFunc("/", h.notFound)
 	return mux
@@ -164,6 +173,9 @@ func (h *Handler) writeMonitorError(w http.ResponseWriter, r *http.Request, err 
 	case errors.Is(err, ErrCursor):
 		httpserver.WriteError(w, r, http.StatusBadRequest,
 			httpserver.ErrBadRequest, "invalid cursor")
+	case errors.Is(err, ErrChannelIneligible):
+		httpserver.WriteError(w, r, http.StatusUnprocessableEntity,
+			httpserver.ErrValidation, "one or more channels not eligible")
 	case errors.Is(err, ErrMonitorNotFound):
 		httpserver.WriteError(w, r, http.StatusNotFound,
 			httpserver.ErrNotFound, "monitor not found")
@@ -373,6 +385,73 @@ func (h *Handler) transition(paused bool) http.HandlerFunc {
 		}
 		httpserver.WriteJSON(w, r, http.StatusOK, toDTO(out))
 	}
+}
+
+// bindBody is the PUT contract: full replacement under the
+// generation fence (RT F11). Duplicate ids collapse server-side;
+// an empty set is a legitimate unbind.
+type bindBody struct {
+	ExpectedGeneration int64    `json:"expected_generation"`
+	ChannelIDs         []string `json:"channel_ids"`
+}
+
+func (h *Handler) bindChannels(w http.ResponseWriter, r *http.Request) {
+	p := owner(r)
+	id, ok := monitorID(w, r)
+	if !ok {
+		return
+	}
+	var in bindBody
+	if apiErr := httpserver.DecodeJSON(w, r, &in, h.maxBody); apiErr != nil {
+		httpserver.WriteErrorFields(w, r, apiErr.Status, apiErr.Code, apiErr.Msg, apiErr.Fields)
+		return
+	}
+	fields := map[string]string{}
+	if in.ExpectedGeneration < 1 {
+		fields["expected_generation"] = "required"
+	}
+	seen := map[uuid.UUID]bool{}
+	ids := make([]uuid.UUID, 0, len(in.ChannelIDs))
+	for _, raw := range in.ChannelIDs {
+		cid, err := uuid.Parse(raw)
+		if err != nil {
+			fields["channel_ids"] = "must be UUIDs"
+			break
+		}
+		if !seen[cid] {
+			seen[cid] = true
+			ids = append(ids, cid)
+		}
+	}
+	if len(fields) > 0 {
+		httpserver.WriteErrorFields(w, r, http.StatusUnprocessableEntity,
+			httpserver.ErrValidation, "validation failed", fields)
+		return
+	}
+	if h.eligible == nil {
+		h.internalError(w, r, errors.New("channel eligibility not wired"))
+		return
+	}
+	var out Monitor
+	err := h.auth.WithActorLock(r.Context(), p, func(tx pgx.Tx, u auth.User) error {
+		var cerr error
+		out, cerr = h.svc.BindChannelsTx(r.Context(), tx, u.ID, id,
+			in.ExpectedGeneration, ids, h.eligible)
+		return cerr
+	})
+	if err != nil {
+		h.writeMonitorError(w, r, err)
+		return
+	}
+	bound := make([]string, 0, len(ids))
+	for _, cid := range ids {
+		bound = append(bound, cid.String())
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"monitor_id":  out.ID,
+		"generation":  out.Generation,
+		"channel_ids": bound,
+	})
 }
 
 func (h *Handler) del(w http.ResponseWriter, r *http.Request) {

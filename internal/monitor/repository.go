@@ -31,6 +31,10 @@ var (
 	ErrBudgetMissing = errors.New("quota budget not initialized")
 	ErrActorInactive = errors.New("owner is not active")
 	ErrUnavailable   = errors.New("monitor store unavailable")
+	// ErrChannelIneligible covers every bind rejection: foreign-owned,
+	// missing, unverified, disabled, or deleted channel. The API never
+	// says which — channel existence is not the caller's data.
+	ErrChannelIneligible = errors.New("one or more channels not eligible")
 )
 
 // Health values mirror the CHECK constraint — no other value persists.
@@ -496,4 +500,53 @@ func (r *Repository) SoftDeleteMonitor(ctx context.Context, ownerID, id uuid.UUI
 	return r.withActorLock(ctx, ownerID, func(tx pgx.Tx, _ actorRow) error {
 		return r.SoftDeleteMonitorTx(ctx, tx, ownerID, id, expectedGen)
 	})
+}
+
+// ChannelEligibility answers which ids are bindable for this owner,
+// evaluated inside the binding transaction so the set can't shift
+// between validate and replace. The composition root supplies
+// notification.EligibleChannelIDs — monitor stays decoupled from the
+// channel package's table.
+type ChannelEligibility func(ctx context.Context, tx pgx.Tx,
+	ownerID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error)
+
+// ReplaceChannelsTx atomically swaps the monitor's binding set under
+// the generation fence (RT F11): monitor FOR UPDATE → expected
+// generation → validate the FULL owned VERIFIED+enabled set →
+// delete+insert + generation++ in one commit. No partial replace:
+// one ineligible id fails the whole set, and a stale generation
+// conflicts before any row moves. Target health stays untouched.
+func (r *Repository) ReplaceChannelsTx(ctx context.Context, tx pgx.Tx,
+	ownerID, id uuid.UUID, expectedGen int64, channelIDs []uuid.UUID,
+	eligible ChannelEligibility) (Monitor, error) {
+	return r.mutateMonitorTx(ctx, tx, ownerID, id, expectedGen,
+		func(tx pgx.Tx, m Monitor) (Monitor, error) {
+			ok, err := eligible(ctx, tx, ownerID, channelIDs)
+			if err != nil {
+				return Monitor{}, mapErr(err)
+			}
+			for _, cid := range channelIDs {
+				if !ok[cid] {
+					return Monitor{}, ErrChannelIneligible
+				}
+			}
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM uptime.monitor_channels
+				 WHERE monitor_id=$1 AND user_id=$2`, id, ownerID); err != nil {
+				return Monitor{}, mapErr(err)
+			}
+			for _, cid := range channelIDs {
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO uptime.monitor_channels
+					   (monitor_id,channel_id,user_id) VALUES ($1,$2,$3)`,
+					id, cid, ownerID); err != nil {
+					return Monitor{}, mapErr(err)
+				}
+			}
+			return scanMonitor(tx.QueryRow(ctx,
+				`UPDATE uptime.monitors SET
+				   generation=generation+1, updated_at=now()
+				 WHERE id=$1 AND user_id=$2 RETURNING `+monitorCols,
+				id, ownerID))
+		})
 }

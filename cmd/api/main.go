@@ -13,6 +13,7 @@ import (
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/monitor"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/notification"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/database"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/logger"
@@ -80,6 +81,19 @@ func run() error {
 		Logger:         log,
 	})
 	monHandler := monitor.NewHandler(monSvc, svc, monitor.HandlerConfig{
+		MaxJSONBody:        cfg.HTTP.MaxJSONBodyBytes,
+		CSRF:               csrfMgr,
+		Logger:             log,
+		ChannelEligibility: notification.EligibleChannelIDs,
+	})
+	chanRepo := notification.NewRepository(pool, cfg.Database.QueryTimeout)
+	chanSvc := notification.NewService(chanRepo, chanRepo, notification.Caps{
+		PendingOwner:   cfg.Alloc.PendingChannelsOwner,
+		PendingGlobal:  cfg.Alloc.PendingChannelsGlobal,
+		RetainedOwner:  cfg.Alloc.RetainedChannelsOwner,
+		RetainedGlobal: cfg.Alloc.RetainedChannelsGlobal,
+	})
+	chanHandler := notification.NewHandler(chanSvc, svc, notification.HandlerConfig{
 		MaxJSONBody: cfg.HTTP.MaxJSONBodyBytes,
 		CSRF:        csrfMgr,
 		Logger:      log,
@@ -90,6 +104,8 @@ func run() error {
 		// Both the bare collection and the subtree mount so POST
 		// /monitors never hits a ServeMux trailing-slash redirect.
 		httpserver.Mount{Pattern: "/monitors", Handler: monHandler.Mux()},
-		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()})
+		httpserver.Mount{Pattern: "/monitors/", Handler: monHandler.Mux()},
+		httpserver.Mount{Pattern: "/notification-channels", Handler: chanHandler.Mux()},
+		httpserver.Mount{Pattern: "/notification-channels/", Handler: chanHandler.Mux()})
 	return srv.Run(ctx)
 }
