@@ -2,7 +2,7 @@
 // owns all schedule/reservation writes at a time, fenced by a
 // session-scoped advisory lock plus a monotonically increasing epoch.
 // Nothing in this package may use a pooled connection for engine
-// writes — the lock lives on the session, so a pooled conn would
+// writes --- the lock lives on the session, so a pooled conn would
 // silently fence nothing.
 package engine
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ import (
 )
 
 // ownerLockKey is the singleton advisory-lock identity. It MUST be a
-// constant — two instances holding locks under different keys would
+// constant --- two instances holding locks under different keys would
 // both believe they own the engine.
 const ownerLockKey int64 = 0x757074696d656e67 // "uptimeng"
 
@@ -30,6 +31,7 @@ var (
 // Owner is the held advisory lock + epoch on a dedicated connection.
 // The conn is sacred: only the Writer goroutine may use it.
 type Owner struct {
+	mu         sync.Mutex // serializes every use of conn
 	conn       *pgx.Conn
 	instance   uuid.UUID
 	epoch      int64
@@ -66,7 +68,7 @@ func BumpEpoch(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (int64, 
 // AcquireOwner takes the session-scoped advisory lock on the given
 // DEDICATED connection (callers must pass a direct pgx.Conn, never a
 // pooled borrow), then bumps the epoch inside one transaction. It
-// blocks until the lock is held or ctx expires — lock contention
+// blocks until the lock is held or ctx expires --- lock contention
 // means another owner is live and this process must not start.
 func AcquireOwner(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (*Owner, error) {
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", ownerLockKey); err != nil {
@@ -74,7 +76,7 @@ func AcquireOwner(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (*Own
 	}
 	epoch, acquiredAt, err := BumpEpoch(ctx, conn, instance)
 	if err != nil {
-		// Best-effort release — session close also frees it.
+		// Best-effort release --- session close also frees it.
 		_, _ = conn.Exec(context.Background(),
 			"SELECT pg_advisory_unlock($1)", ownerLockKey)
 		return nil, err
@@ -83,7 +85,7 @@ func AcquireOwner(ctx context.Context, conn *pgx.Conn, instance uuid.UUID) (*Own
 }
 
 // Release drops the advisory lock and closes the dedicated
-// connection. After Release the Owner is dead — callers must not
+// connection. After Release the Owner is dead --- callers must not
 // reuse it; re-acquisition always produces a new epoch.
 func (o *Owner) Release(ctx context.Context) error {
 	if o.conn == nil {

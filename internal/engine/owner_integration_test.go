@@ -82,6 +82,12 @@ func TestOwnerConnectionLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
+	// Read the backend PID BEFORE starting the writer — c1 is the
+	// writer's conn and a pgx.Conn must not be shared between goroutines.
+	var backendPID int
+	if err := c1.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&backendPID); err != nil {
+		t.Fatal(err)
+	}
 	w := NewWriter(o1, 50*time.Millisecond)
 	go w.Run(ctx)
 	deadline := time.Now().Add(2 * time.Second)
@@ -93,10 +99,6 @@ func TestOwnerConnectionLoss(t *testing.T) {
 	}
 
 	// Terminate the backend holding the advisory lock.
-	var backendPID int
-	if err := c1.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&backendPID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := c2.Exec(ctx, "SELECT pg_terminate_backend($1)", backendPID); err != nil {
 		t.Fatalf("terminate: %v", err)
 	}

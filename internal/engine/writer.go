@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// OwnerState is the immutable external view of engine ownership —
+// OwnerState is the immutable external view of engine ownership ---
 // safe to read from any goroutine at any time.
 type OwnerState struct {
 	Instance   uuid.UUID
@@ -21,7 +21,7 @@ type OwnerState struct {
 
 // Writer is the exclusive user of the owner connection: heartbeats,
 // and (in later cards) every schedule/reservation write. If the conn
-// dies, Alive flips false and stays false — there is no reconnect;
+// dies, Alive flips false and stays false --- there is no reconnect;
 // only a fresh AcquireOwner (new epoch) may resume ownership.
 type Writer struct {
 	owner   *Owner
@@ -54,7 +54,7 @@ func (w *Writer) Done() <-chan struct{} { return w.done }
 
 // Run heartbeats on the owner connection until ctx ends or the conn
 // dies. All engine writes in later cards flow through Run's goroutine
-// via the same conn — this is the single-writer discipline.
+// via the same conn --- this is the single-writer discipline.
 func (w *Writer) Run(ctx context.Context) {
 	defer w.stopped.Do(func() { close(w.done) })
 	t := time.NewTicker(w.hbEvery)
@@ -74,11 +74,13 @@ func (w *Writer) Run(ctx context.Context) {
 	}
 }
 
-// Heartbeat refreshes heartbeat_at on the owner connection — proof
+// Heartbeat refreshes heartbeat_at on the owner connection --- proof
 // the session (and its advisory lock) is still alive. Any failure
 // marks the writer dead permanently: a stale owner must not keep
 // believing it writes under a fence it no longer holds.
 func (w *Writer) Heartbeat(ctx context.Context) error {
+	w.owner.mu.Lock()
+	defer w.owner.mu.Unlock()
 	if w.owner.conn == nil {
 		w.alive.Store(false)
 		return ErrOwnerLost
@@ -92,7 +94,7 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 	return nil
 }
 
-// Exec runs fn with the owner connection — the ONLY sanctioned way
+// Exec runs fn with the owner connection --- the ONLY sanctioned way
 // for engine code paths (reservations, results, reconciliation) to
 // reach the database. Callers receive the lock-holding conn, never a
 // pooled borrow.
