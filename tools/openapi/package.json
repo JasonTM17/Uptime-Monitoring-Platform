@@ -1,0 +1,17 @@
+{
+  "name": "uptime-openapi-check",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenAPI 3.1.1 lint + implemented-route parity + example validation for docs/api/openapi.yaml",
+  "type": "module",
+  "scripts": {
+    "check": "node check-openapi.mjs",
+    "test": "node --test check-openapi.test.mjs"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "13.1.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "yaml": "2.9.1"
+  }
+}

@@ -1,11 +1,14 @@
 # Documentation index
 
-Project đang ở giai đoạn **early implementation — foundation phase**. Go
-module, toolchain pins và local/test PostgreSQL Compose đã có; chưa có API
-endpoints, runtime screenshots hay public deployment để kiểm chứng.
+Project đang ở giai đoạn **active implementation**. Auth/session,
+owned monitor APIs và notification channels đã có kèm contract tests;
+chưa có engine, delivery, admin hay public deployment để kiểm chứng.
 
 ## Public docs
 
+- [API contract (OpenAPI 3.1.1)](api/openapi.yaml): implemented routes
+  đạt parity với `tools/openapi/check-openapi.mjs`; operations tagged
+  `planned`/`x-future` là contract drafts, chưa tồn tại ở runtime.
 - [Product requirements và scope traceability](product-requirements.md):
   Must/non-goals, R01–R24 map tới phase/gate, 15 deliverables.
 - [Toolchain pins và compatibility](toolchain.md): pinned versions, local

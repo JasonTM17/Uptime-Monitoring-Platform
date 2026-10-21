@@ -27,6 +27,19 @@ TEST_DATABASE_URL="postgres://uptime_test:<pw>@127.0.0.1:54330/uptime_test?sslmo
   go test -count=1 -tags=integration ./internal/auth/
 ```
 
+## OpenAPI contract gate
+
+`docs/api/openapi.yaml` (3.1.1) is checked by a pinned toolchain under
+`tools/openapi/` — spec lint, implemented-route parity (x-future
+operations excluded), example-vs-schema validation, and example
+credential hygiene:
+
+```sh
+npm --prefix tools/openapi ci          # lockfile-reproducible install
+node tools/openapi/check-openapi.mjs   # lint + parity + examples
+node --test tools/openapi/check-openapi.test.mjs
+```
+
 Behavioral coverage includes: migration roundtrip, repository error
 mapping, concurrent canonical-email registration (one account), session
 create/lookup/revoke with SHA-256-only storage, owner-scoped inventory

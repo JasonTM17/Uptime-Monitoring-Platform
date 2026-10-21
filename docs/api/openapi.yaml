@@ -1,0 +1,1085 @@
+openapi: 3.1.1
+info:
+  title: Uptime Monitoring Platform — Public API
+  version: 0.3.0
+  description: |
+    Owner-scoped public API contract. Every JSON response uses the
+    envelope below: success wraps the payload in `data`, failure wraps
+    `error` and always carries `request_id`. All responses are
+    `Cache-Control: no-store`.
+
+    **Authentication.** Session cookie `uptime_session` (HttpOnly,
+    SameSite=Lax). Obtain it via `POST /auth/login`; identify the
+    caller with `GET /auth/me`.
+
+    **CSRF.** State-changing routes require the double-submit pair:
+    the `uptime_csrf` cookie issued by `GET /auth/csrf` plus the same
+    token in the `X-CSRF-Token` header, and a matching `Origin`
+    header when Origin is sent. Missing/mismatched pairs are
+    `403 CSRF_REJECTED`.
+
+    **Optimistic concurrency.** Mutations on existing resources take
+    `expected_generation` (monitors) or `expected_version` (channels)
+    in the body. A stale fence is `409 CONFLICT`; re-read and retry.
+
+    **Planned surface.** Operations tagged `planned` are contract
+    drafts reserved for later cards (engine, delivery, admin). They
+    are marked `x-future: true`, are NOT implemented, and are excluded
+    from route parity checks.
+  contact: {}
+servers:
+  - url: http://127.0.0.1:8080
+    description: local
+tags:
+  - name: health
+  - name: auth
+  - name: monitors
+  - name: notification-channels
+  - name: planned
+    description: Reserved contract surface — NOT implemented.
+
+paths:
+  /health/live:
+    get:
+      tags: [health]
+      summary: Process liveness (never touches dependencies)
+      operationId: healthLive
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+              example: { status: ok }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Dependency readiness (DB-verified probe)
+      operationId: healthReady
+      responses:
+        '200':
+          description: Dependencies ready
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+              example: { status: ready }
+        '503':
+          description: A dependency is down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+              example: { status: unavailable }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+
+  /auth/csrf:
+    get:
+      tags: [auth]
+      summary: Issue a CSRF token + cookie pair
+      operationId: csrfChallenge
+      responses:
+        '200':
+          description: Token issued; `uptime_csrf` cookie set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: uptime_csrf=<token>; Path=/; SameSite=Lax
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [csrf_token]
+                    properties:
+                      csrf_token: { type: string }
+              example:
+                data: { csrf_token: "9f3d2c1b-example-token" }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register an account
+      operationId: register
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterInput' }
+            example:
+              email: user@example.com
+              password: "<your-12+-char-password>"
+              display_name: Ada
+      responses:
+        '201':
+          description: Account created (monitor_limit stamped server-side)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '409':
+          description: Registration could not be completed (anti-enumeration fixed message)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error: { code: CONFLICT, message: registration could not be completed }
+                request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in (sets uptime_session cookie)
+      operationId: login
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginInput' }
+            example:
+              email: user@example.com
+              password: "<your-12+-char-password>"
+      responses:
+        '200':
+          description: Session created
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: uptime_session=<opaque>; HttpOnly; Path=/; SameSite=Lax
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [user, session_expires_at]
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      session_expires_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: Invalid credentials — unknown, disabled, and wrong password are indistinguishable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error: { code: UNAUTHENTICATED, message: invalid credentials }
+                request_id: "req_01H…"
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out (idempotent; clears the cookie)
+      operationId: logout
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      responses:
+        '200':
+          description: Logged out (always, even without a valid session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [status]
+                    properties:
+                      status: { type: string, enum: [logged_out] }
+              example: { data: { status: logged_out } }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Current principal
+      operationId: me
+      responses:
+        '200':
+          description: Caller identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [user, session_expires_at]
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      session_expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: List own sessions (bounded page)
+      operationId: listOwnSessions
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Own session inventory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [sessions, page, page_size]
+                    properties:
+                      sessions:
+                        type: array
+                        items: { $ref: '#/components/schemas/SessionDTO' }
+                      page: { type: integer }
+                      page_size: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke one own session (foreign IDs are 404)
+      operationId: revokeOwnSession
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /monitors:
+    post:
+      tags: [monitors]
+      summary: Create a monitor
+      operationId: createMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MonitorCreateInput' }
+            example:
+              name: marketing-site
+              target_url: https://example.com/health
+              interval_seconds: 300
+              timeout_seconds: 5
+              expected_status: 200
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { schema: { type: string }, description: "/monitors/{id}" }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Monitor' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '409':
+          description: Quota bound reached — scope tells WHICH cap, never global counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              examples:
+                ownerLimit:
+                  value:
+                    error:
+                      code: QUOTA_EXCEEDED
+                      message: monitor limit reached
+                      fields: { scope: owner_monitor_limit }
+                    request_id: "req_01H…"
+                platformAdmission:
+                  value:
+                    error:
+                      code: QUOTA_EXCEEDED
+                      message: monitor limit reached
+                      fields: { scope: platform_admission }
+                    request_id: "req_01H…"
+                retained:
+                  value:
+                    error:
+                      code: ALLOCATION_LIMIT_REACHED
+                      message: monitor allocation limit reached
+                      fields: { scope: monitors }
+                    request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [monitors]
+      summary: List own monitors (keyset-paginated)
+      operationId: listMonitors
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: paused
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: health
+          in: query
+          schema: { type: string, enum: [UNKNOWN, UP, DOWN] }
+        - name: q
+          in: query
+          description: Escaped substring match on name
+          schema: { type: string, maxLength: 120 }
+        - name: cursor
+          in: query
+          description: |
+            Opaque keyset resume token (`m1.<base64url>`). Bound to the
+            filter set it was issued under — resuming with different
+            filters is 400.
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [items, has_more, next_cursor]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Monitor' }
+                      has_more: { type: boolean }
+                      next_cursor: { type: [string, 'null'] }
+        '400':
+          description: Invalid cursor (malformed, foreign-version, or filter-mismatched)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error: { code: BAD_REQUEST, message: invalid cursor }
+                request_id: "req_01H…"
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /monitors/{id}:
+    get:
+      tags: [monitors]
+      summary: Read one own monitor (foreign IDs are 404)
+      operationId: getMonitor
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: The monitor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Monitor' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [monitors]
+      summary: Update mutable fields under the generation fence
+      operationId: patchMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_generation]
+              allOf:
+                - $ref: '#/components/schemas/MonitorPatchInput'
+              unevaluatedProperties: false
+              properties:
+                expected_generation: { type: integer, minimum: 1 }
+            example:
+              expected_generation: 3
+              name: marketing-site-v2
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Monitor' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [monitors]
+      summary: Soft-delete under the generation fence
+      operationId: deleteMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedGeneration' }
+            example: { expected_generation: 3 }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /monitors/{id}/pause:
+    post:
+      tags: [monitors]
+      summary: Pause scheduling (idempotent; does not mark DOWN)
+      operationId: pauseMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedGeneration' }
+            example: { expected_generation: 3 }
+      responses:
+        '200':
+          description: Paused (same-state pause is a no-op success)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Monitor' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /monitors/{id}/resume:
+    post:
+      tags: [monitors]
+      summary: Resume scheduling (idempotent; does not fabricate a check)
+      operationId: resumeMonitor
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedGeneration' }
+            example: { expected_generation: 4 }
+      responses:
+        '200':
+          description: Resumed; next_check_at reset to now() as eligibility
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Monitor' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /monitors/{id}/notification-channels:
+    put:
+      tags: [monitors]
+      summary: Atomically replace the monitor's channel binding set
+      description: |
+        Full replacement under the generation fence (one winner among
+        same-generation writers). Every listed channel must be owned,
+        VERIFIED, and enabled — a single ineligible id fails the whole
+        set with no partial update. Empty `channel_ids` is a legitimate
+        unbind. Duplicates collapse server-side.
+      operationId: replaceMonitorChannels
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_generation, channel_ids]
+              additionalProperties: false
+              properties:
+                expected_generation: { type: integer, minimum: 1 }
+                channel_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+            example:
+              expected_generation: 4
+              channel_ids: ["018f2f2a-7e51-7a2c-9a02-1f7f9b2d0a11"]
+      responses:
+        '200':
+          description: Binding set replaced; generation incremented once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [monitor_id, generation, channel_ids]
+                    properties:
+                      monitor_id: { type: string, format: uuid }
+                      generation: { type: integer }
+                      channel_ids:
+                        type: array
+                        items: { type: string, format: uuid }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /notification-channels:
+    post:
+      tags: [notification-channels]
+      summary: Create a pending channel (label only)
+      description: |
+        Browser input is metadata ONLY — `{label}`. The destination is
+        sealed by the operator CLI after out-of-band owner consent
+        verification; it never crosses a browser request. A pending
+        channel consumes the pending AND retained allocation budgets,
+        including after soft-delete (tombstoned pending still counts).
+      operationId: createChannel
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChannelCreateInput' }
+            example: { label: telegram-oncall }
+      responses:
+        '201':
+          description: Pending channel created
+          headers:
+            Location:
+              schema: { type: string }
+              description: "/notification-channels/{id}"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Channel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '409':
+          description: Pending or retained allocation bound reached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              examples:
+                pending:
+                  value:
+                    error:
+                      code: ALLOCATION_LIMIT_REACHED
+                      message: pending channel limit reached
+                      fields: { scope: pending_channels }
+                    request_id: "req_01H…"
+                retained:
+                  value:
+                    error:
+                      code: ALLOCATION_LIMIT_REACHED
+                      message: channel allocation limit reached
+                      fields: { scope: channels }
+                    request_id: "req_01H…"
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [notification-channels]
+      summary: List own channels (live rows only)
+      operationId: listChannels
+      responses:
+        '200':
+          description: Owned channels
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /notification-channels/{id}:
+    get:
+      tags: [notification-channels]
+      summary: Read one own channel (foreign IDs are 404)
+      operationId: getChannel
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: The channel — mask only, never the destination
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [notification-channels]
+      summary: Soft-delete under the version fence (audit preserved)
+      operationId: deleteChannel
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+            example: { expected_version: 2 }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /notification-channels/{id}/disable:
+    post:
+      tags: [notification-channels]
+      summary: Disable a channel (history preserved; unbinds eligibility)
+      description: |
+        Disabling flips `enabled=false` and status to DISABLED under the
+        version fence. Verification receipt, mask, and ciphertext are
+        retained — disable is a lifecycle state, not an erasure. A
+        disabled channel fails binding eligibility; unsent events are
+        the delivery phase's concern, not this route's.
+      operationId: disableChannel
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+            example: { expected_version: 2 }
+      responses:
+        '200':
+          description: Disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ------------------------------------------------------------------
+  # Planned surface — contract drafts, NOT implemented. Every operation
+  # below carries x-future: true and is excluded from parity checks.
+  # ------------------------------------------------------------------
+  /summary:
+    get:
+      tags: [planned]
+      summary: (C50) Owner usage summary — typed quota schema
+      x-future: true
+      operationId: plannedSummary
+      responses:
+        '200':
+          description: Draft — typed quota block per F09
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataEnvelope'
+                properties:
+                  data:
+                    type: object
+                    required: [quota]
+                    properties:
+                      quota:
+                        type: object
+                        required: [used, active, paused, limit, profile, as_of, source]
+                        properties:
+                          used: { type: integer }
+                          active: { type: integer }
+                          paused: { type: integer }
+                          limit: { type: integer }
+                          profile: { type: string, enum: [local, hosted] }
+                          as_of: { type: string, format: date-time }
+                          source: { type: string, enum: [stamped, default, override] }
+
+  /notification-channels/{id}/test:
+    post:
+      tags: [planned]
+      summary: (C47/C57/C62) Send a test notification — NOT exposed yet
+      x-future: true
+      operationId: plannedChannelTest
+      parameters:
+        - $ref: '#/components/parameters/CSRFGuard'
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '202': { description: Draft — queued vs delivered is distinct }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/CSRFRejected' }
+
+  /incidents:
+    get:
+      tags: [planned]
+      summary: (engine phase) Incident timeline
+      x-future: true
+      operationId: plannedIncidents
+      responses:
+        '200': { description: Draft }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/users:
+    get:
+      tags: [planned]
+      summary: (admin phase) User administration — RBAC required
+      x-future: true
+      operationId: plannedAdminUsers
+      responses:
+        '200': { description: Draft }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: Custom-role lacks permissions (missing_permissions fields)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: role missing required permissions
+                  fields: { missing_permissions: "users.read, quota.write" }
+                request_id: "req_01H…"
+
+components:
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CSRFGuard:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: |
+        Double-submit token — must match the `uptime_csrf` cookie and
+        pair with a matching `Origin` header when Origin is sent.
+      schema: { type: string }
+
+  schemas:
+    DataEnvelope:
+      type: object
+      description: Success wrapper — payload under `data`.
+    ErrorEnvelope:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { $ref: '#/components/schemas/ErrorCode' }
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+              description: Per-field or scope discriminators (safe scopes only — never global counts)
+        request_id: { type: string }
+    ErrorCode:
+      type: string
+      enum:
+        - BAD_REQUEST
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - CSRF_REJECTED
+        - NOT_FOUND
+        - METHOD_NOT_ALLOWED
+        - CONFLICT
+        - QUOTA_EXCEEDED
+        - ALLOCATION_LIMIT_REACHED
+        - PAYLOAD_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
+        - VALIDATION_ERROR
+        - RATE_LIMITED
+        - REAUTH_REQUIRED
+        - INTERNAL_ERROR
+        - UNAVAILABLE
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, ready, unavailable] }
+    User:
+      type: object
+      required: [id, email, display_name, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        created_at: { type: string, format: date-time }
+    SessionDTO:
+      type: object
+      required: [id, device_label, created_at, last_seen_at, expires_at, current]
+      properties:
+        id: { type: string, format: uuid }
+        device_label: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        current: { type: boolean }
+    RegisterInput:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, minLength: 3, maxLength: 254 }
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: 12–128 codepoints, 1024-byte wire cap
+        display_name: { type: string, maxLength: 120 }
+    LoginInput:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    Monitor:
+      type: object
+      required:
+        - id
+        - name
+        - target_url
+        - method
+        - interval_seconds
+        - timeout_seconds
+        - expected_status
+        - is_paused
+        - health
+        - generation
+        - next_check_at
+        - last_checked_at
+        - last_response_time_ms
+        - last_error_type
+        - freshness
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 120 }
+        target_url: { type: string, format: uri }
+        method: { type: string, enum: [GET] }
+        interval_seconds: { type: integer, minimum: 60, maximum: 86400 }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 10 }
+        expected_status: { type: [integer, 'null'], minimum: 200, maximum: 599 }
+        is_paused: { type: boolean }
+        health: { type: string, enum: [UNKNOWN, UP, DOWN] }
+        generation: { type: integer, minimum: 1 }
+        next_check_at: { type: string, format: date-time }
+        last_checked_at: { type: [string, 'null'], format: date-time }
+        last_response_time_ms: { type: [integer, 'null'] }
+        last_error_type: { type: [string, 'null'] }
+        freshness: { type: [string, 'null'], description: null until the engine lands }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MonitorCreateInput:
+      type: object
+      required: [name, target_url, interval_seconds, timeout_seconds]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        target_url:
+          type: string
+          format: uri
+          description: http/https only — no userinfo, fragment, port, or private literal IP; DNS/SSRF proof is at dial time
+        interval_seconds: { type: integer, minimum: 60, maximum: 86400 }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 10 }
+        expected_status: { type: integer, minimum: 200, maximum: 599 }
+    MonitorPatchInput:
+      type: object
+      # Consumed via allOf — strictness lives in unevaluatedProperties
+      # at the compose site (additionalProperties can't see siblings).
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        target_url: { type: string, format: uri }
+        interval_seconds: { type: integer, minimum: 60, maximum: 86400 }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 10 }
+        expected_status: { type: [integer, 'null'], minimum: 200, maximum: 599 }
+    ExpectedGeneration:
+      type: object
+      required: [expected_generation]
+      additionalProperties: false
+      properties:
+        expected_generation: { type: integer, minimum: 1 }
+    ExpectedVersion:
+      type: object
+      required: [expected_version]
+      additionalProperties: false
+      properties:
+        expected_version: { type: integer, minimum: 1 }
+    Channel:
+      type: object
+      required:
+        - id
+        - label
+        - kind
+        - status
+        - enabled
+        - destination_mask
+        - verified_at
+        - version
+        - created_at
+        - updated_at
+      description: |
+        The ciphertext and verification receipt never leave the service
+        boundary. `destination_mask` reveals at most the last 4 chars.
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, maxLength: 120 }
+        kind: { type: string, enum: [TELEGRAM] }
+        status: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, DISABLED] }
+        enabled: { type: boolean }
+        destination_mask: { type: [string, 'null'], example: "•••5123" }
+        verified_at: { type: [string, 'null'], format: date-time }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ChannelCreateInput:
+      type: object
+      required: [label]
+      additionalProperties: false
+      description: Label only — destination is operator-CLI territory.
+      properties:
+        label: { type: string, minLength: 1, maxLength: 120 }
+
+  responses:
+    BadRequest:
+      description: Malformed body/query
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: BAD_REQUEST, message: invalid request body }
+            request_id: "req_01H…"
+    Unauthenticated:
+      description: Missing/expired/revoked session
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: UNAUTHENTICATED, message: authentication required }
+            request_id: "req_01H…"
+    Forbidden:
+      description: Authenticated but not permitted (admin surfaces)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: FORBIDDEN, message: insufficient permissions }
+            request_id: "req_01H…"
+    CSRFRejected:
+      description: CSRF pair missing/mismatched or Origin rejected
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: CSRF_REJECTED, message: csrf check failed }
+            request_id: "req_01H…"
+    NotFound:
+      description: Missing OR foreign-owned — indistinguishable by design
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: NOT_FOUND, message: not found }
+            request_id: "req_01H…"
+    MethodNotAllowed:
+      description: Wrong verb for a registered path
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: METHOD_NOT_ALLOWED, message: method not allowed }
+            request_id: "req_01H…"
+    ValidationError:
+      description: Schema/policy failure — `fields` names the offenders
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: validation failed
+              fields: { target_url: "scheme must be http or https" }
+            request_id: "req_01H…"
+    GenerationConflict:
+      description: Stale expected_generation/expected_version — re-read and retry
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: CONFLICT, message: stale generation — re-read and retry }
+            request_id: "req_01H…"
+    RateLimited:
+      description: Attempt budget exhausted
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            error: { code: RATE_LIMITED, message: too many attempts }
+            request_id: "req_01H…"
