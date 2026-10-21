@@ -21,7 +21,7 @@ import (
 // hash cannot trigger a memory DoS.
 
 const (
-	maxPasswordBytes = 4 << 10 // bound input before any KDF work
+	maxPasswordBytes = 1024 // spec byte cap, applied before any KDF work
 	maxArgonMemKiB   = 1024 * 1024
 	maxArgonTime     = 16
 	maxArgonPar      = 8
