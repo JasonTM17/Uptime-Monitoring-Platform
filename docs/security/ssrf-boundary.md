@@ -8,9 +8,13 @@ read the results through status/latency side channels.
 ## Where the boundary lives
 
 1. **Syntax gate (C19, monitor create/patch).** Schemes limited to
-   `http`/`https`; userinfo, fragments, explicit ports, and whitespace
-   rejected; obvious non-public literals refused early. This is a UX
-   gate, NOT the security boundary — strings can't prove routability.
+   `http`/`https`; userinfo, fragments, and whitespace rejected;
+   explicit ports limited to `80`/`443` and honored literally
+   (`http://x:443` means plain HTTP over 443). Obvious non-public
+   literals refused early. This is a UX gate, NOT the security
+   boundary — strings can't prove routability. The checker's
+   `ParseTarget` mirrors this contract exactly; a divergence would
+   silently self-exclude a monitor the API accepted.
 2. **Resolution gate (C28).** Every DNS answer is classified with
    `netip` AFTER unmapping IPv4-mapped IPv6. ANY denied answer fails
    the whole resolution — a hostname is dialable only when every
@@ -34,6 +38,11 @@ read the results through status/latency side channels.
 | `HTTP_PROXY`/`HTTPS_PROXY` env | transport sets `Proxy: nil` |
 | Zone-scoped link-local (`fe80::1%eth0`) | denied — scoped addresses never dialable |
 | 6to4 `2002::/16` embedding private v4 | denied |
+| NAT64 WKP `64:ff9b::/96` embedding v4 | denied — a translator on-path delivers to embedded private v4 |
+| Deprecated `::/96` v4-compatible, SRv6 `5f00::/16`, doc `3fff::/20`, AS112/AMT/6to4-relay anycasts | denied — non-destination special-purpose |
+| IDN hostnames | normalized to A-label (idna.Lookup.ToASCII) before lookup/SNI/Host — one wire form |
+| Response-header flood | `MaxResponseHeaderBytes: 16 KiB` — collector-side exclusion, not target evidence |
+| FQDN trailing dot | stripped at parse; resolution is on the relative form — OS search-domain expansion can alter the queried name; all answers are still policy-validated before dial |
 
 ## Explicit limits
 

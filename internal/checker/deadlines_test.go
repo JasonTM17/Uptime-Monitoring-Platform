@@ -87,10 +87,7 @@ func TestDeadlineClassification(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newChecker(tc.res, tc.dial)
-			o, err := c.Check(context.Background(), targetFor("http://check.example/", tc.timeout))
-			if err != nil {
-				t.Fatal(err)
-			}
+			o := c.Check(context.Background(), targetFor("http://check.example/", tc.timeout))
 			if o.Outcome != tc.want {
 				t.Fatalf("phase fault classified %d, want %d", o.Outcome, tc.want)
 			}
@@ -116,7 +113,7 @@ func TestCancelAfterHeaders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Observation, 1)
 	go func() {
-		o, _ := c.Check(ctx, targetFor("http://check.example/", 30))
+		o := c.Check(ctx, targetFor("http://check.example/", 10))
 		done <- o
 	}()
 	time.Sleep(120 * time.Millisecond) // headers arrive, body stalls
@@ -145,11 +142,7 @@ func TestConcurrentChecks(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			o, err := c.Check(context.Background(), targetFor("http://check.example/", 5))
-			if err != nil {
-				outcomes[i] = OutcomeInternalError
-				return
-			}
+			o := c.Check(context.Background(), targetFor("http://check.example/", 5))
 			outcomes[i] = o.Outcome
 		}(i)
 	}
@@ -170,10 +163,10 @@ func TestGoroutineBounds(t *testing.T) {
 	})
 	c := checkerFor(t, stub)
 	// Warm up once so steady-state allocations don't skew the count.
-	_, _ = c.Check(context.Background(), targetFor("http://check.example/", 2))
+	_ = c.Check(context.Background(), targetFor("http://check.example/", 2))
 	base := runtime.NumGoroutine()
 	for i := 0; i < 20; i++ {
-		_, _ = c.Check(context.Background(), targetFor("http://check.example/", 2))
+		_ = c.Check(context.Background(), targetFor("http://check.example/", 2))
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for runtime.NumGoroutine() > base+8 && time.Now().Before(deadline) {

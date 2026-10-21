@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 )
@@ -30,12 +31,26 @@ func defaultDial(ctx context.Context, network, address string) (net.Conn, error)
 //     cannot reroute the connection.
 //   - Keep-alives and HTTP/2 disabled — no cross-request reuse, no
 //     coalescing a later connection onto this target's socket.
+//
+// maxDialAttempts bounds the approved-set failover — a defined
+// attempt count, not "every answer DNS ever returned".
+const maxDialAttempts = 4
+
+// maxHeaderBytes caps response headers — a hostile target must not
+// stream unbounded headers into collector memory (body cap alone
+// does not cover this).
+const maxHeaderBytes = 16 << 10
+
 func newSafeTransport(rt ResolvedTarget, dial DialFunc) *http.Transport {
 	addrs := rt.Addrs()
+	if len(addrs) > maxDialAttempts {
+		addrs = addrs[:maxDialAttempts]
+	}
 	return &http.Transport{
-		Proxy:             nil,
-		DisableKeepAlives: true,
-		ForceAttemptHTTP2: false,
+		Proxy:                  nil,
+		DisableKeepAlives:      true,
+		ForceAttemptHTTP2:      false,
+		MaxResponseHeaderBytes: maxHeaderBytes,
 		TLSClientConfig: &tls.Config{
 			ServerName:         rt.Host(),
 			InsecureSkipVerify: false, // never — verification is the point
@@ -54,6 +69,12 @@ func newSafeTransport(rt ResolvedTarget, dial DialFunc) *http.Transport {
 					return nil, ctx.Err()
 				}
 			}
+			if lastErr == nil {
+				// Unreachable via ResolveValidated (≥1 answer
+				// guaranteed); guard the test seam against a
+				// (nil, nil) return that panics inside net/http.
+				return nil, errInternal
+			}
 			return nil, lastErr
 		},
 	}
@@ -66,18 +87,8 @@ func NewSafeTransport(rt ResolvedTarget) *http.Transport {
 	return newSafeTransport(rt, defaultDial)
 }
 
-// newClient composes transport + redirect refusal. Redirects are not
-// followed at all: a 3xx is the target's answer (usually
-// OutcomeUnexpectedStatus), never an invitation to a second,
-// unvalidated dial.
-func newClient(rt ResolvedTarget, dial DialFunc) *http.Client {
-	return &http.Client{
-		Transport: newSafeTransport(rt, dial),
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
+// httpClientFor composes transport + redirect refusal and lives in
+// http_checker.go next to its only caller.
 
 // BuildRequest creates the check request against the RESOLVED host
 // view: canonical host (no trailing dot), scheme, and the original
@@ -90,6 +101,12 @@ func BuildRequest(ctx context.Context, rt ResolvedTarget, rawURL string) (*http.
 	}
 	u.Scheme = rt.Scheme()
 	u.Host = rt.Host()
+	// IPv6 literal authority needs brackets — a bare v6 address makes
+	// an unparseable Host field (SNI stays the bare host; only the
+	// wire authority is bracketed).
+	if addr, aerr := netip.ParseAddr(rt.Host()); aerr == nil && addr.Is6() {
+		u.Host = "[" + rt.Host() + "]"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: build request: %v", errInternal, err)

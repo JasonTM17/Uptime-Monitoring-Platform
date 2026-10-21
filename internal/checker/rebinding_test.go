@@ -43,10 +43,7 @@ func TestDNSRebinding(t *testing.T) {
 	// two ways: run 1 dials the validated public set; runs 2+ get
 	// the rebound private answer and are policy-blocked outright.
 	for i := 0; i < 3; i++ {
-		o, err := c.Check(context.Background(), targetFor("http://rebind.example/", 3))
-		if err != nil {
-			t.Fatal(err)
-		}
+		o := c.Check(context.Background(), targetFor("http://rebind.example/", 3))
 		if i == 0 && o.Outcome != OutcomeTimeout {
 			t.Fatalf("run %d: outcome = %d", i, o.Outcome)
 		}
@@ -79,10 +76,7 @@ func TestNoPrivateDial(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 	c := newChecker(res, dial)
-	o, err := c.Check(context.Background(), targetFor("http://internal.example/", 3))
-	if err != nil {
-		t.Fatal(err)
-	}
+	o := c.Check(context.Background(), targetFor("http://internal.example/", 3))
 	if o.Outcome != OutcomePolicyBlocked {
 		t.Fatalf("private answer must be policy-blocked, got %d", o.Outcome)
 	}
@@ -102,10 +96,7 @@ func TestLegitimatePublicFixture(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 	c := checkerFor(t, stub)
-	o, err := c.Check(context.Background(), targetFor("http://legit.example/", 3))
-	if err != nil {
-		t.Fatal(err)
-	}
+	o := c.Check(context.Background(), targetFor("http://legit.example/", 3))
 	if o.Outcome != OutcomeSuccess {
 		t.Fatalf("public target must be checkable, got %d", o.Outcome)
 	}
@@ -167,10 +158,7 @@ func TestCancelBeforeDial(t *testing.T) {
 	c := newChecker(res, dial)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	o, err := c.Check(ctx, targetFor("http://x.example/", 3))
-	if err != nil {
-		t.Fatal(err)
-	}
+	o := c.Check(ctx, targetFor("http://x.example/", 3))
 	if o.Outcome != OutcomeCanceled {
 		t.Fatalf("got %d", o.Outcome)
 	}

@@ -287,3 +287,20 @@ func TestConcurrentTargetIsolation(t *testing.T) {
 		}
 	}
 }
+
+// A bracketed IPv6 literal must keep brackets in the wire authority —
+// a bare v6 host produces an unparseable request and a silent
+// INTERNAL_ERROR gap for a monitor C19 accepted.
+func TestIPv6LiteralAuthority(t *testing.T) {
+	rt := testResolved("2606:4700:4700::1111", 443, "2606:4700:4700::1111")
+	req, err := BuildRequest(context.Background(), rt, "https://[2606:4700:4700::1111]/h")
+	if err != nil {
+		t.Fatalf("v6 literal must build: %v", err)
+	}
+	if req.URL.Host != "[2606:4700:4700::1111]" {
+		t.Fatalf("authority = %q, want bracketed v6", req.URL.Host)
+	}
+	if req.Host != "" && req.Host != "[2606:4700:4700::1111]" {
+		t.Fatalf("host = %q", req.Host)
+	}
+}

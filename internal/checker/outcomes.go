@@ -2,8 +2,10 @@ package checker
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,8 +43,11 @@ func ClassifyError(err error) Outcome {
 	var certErr x509.CertificateInvalidError
 	var hostErr x509.HostnameError
 	var unknownAuthErr x509.UnknownAuthorityError
+	var recordErr tls.RecordHeaderError
+	var alertErr tls.AlertError
 	if errors.As(err, &certErr) || errors.As(err, &hostErr) ||
-		errors.As(err, &unknownAuthErr) {
+		errors.As(err, &unknownAuthErr) || errors.As(err, &recordErr) ||
+		errors.As(err, &alertErr) {
 		return OutcomeTLSError
 	}
 	var dnsErr *net.DNSError
@@ -50,9 +55,11 @@ func ClassifyError(err error) Outcome {
 		return OutcomeDNSError
 	}
 	// Transport-level failures after DNS: refused, reset, no route,
-	// TLS handshake records that aren't verification errors, etc.
+	// and mid-body truncation — all target-side transport behavior,
+	// never collector faults.
 	var opErr *net.OpError
-	if errors.As(err, &opErr) || errors.Is(err, syscall.ECONNREFUSED) {
+	if errors.As(err, &opErr) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
 		return OutcomeConnectError
 	}
 	// An http client's *url.Error is only a wrapper — classify on the

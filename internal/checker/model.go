@@ -1,9 +1,3 @@
-// Package checker performs bounded, policy-checked outbound HTTP
-// observations of monitor targets. It owns the whole boundary between
-// "we tried to reach the target" and "here is typed evidence": DNS
-// validation, pinned dialing, TLS verification, body/deadline bounds
-// and outcome classification. It knows nothing about schedulers,
-// databases, or notifications — an Observation is its only product.
 package checker
 
 import (
@@ -85,8 +79,8 @@ func NewObservation(t Target, outcome Outcome, status *int,
 			return Observation{}, errors.New("success requires an HTTP status")
 		}
 	case OutcomeUnexpectedStatus:
-		if status == nil {
-			return Observation{}, errors.New("unexpected-status requires an HTTP status")
+		if status == nil || *status < 100 || *status > 599 {
+			return Observation{}, errors.New("unexpected-status requires a valid HTTP status")
 		}
 	case OutcomePolicyBlocked, OutcomeCanceled, OutcomeInternalError:
 		if status != nil {
@@ -96,6 +90,12 @@ func NewObservation(t Target, outcome Outcome, status *int,
 		if status != nil {
 			return Observation{}, errors.New("failure outcome must not carry a status")
 		}
+	}
+	// Every evidence outcome carries latency � time-to-answer for
+	// status outcomes, time-to-failure for eligible failures. Only
+	// exclusions may leave it nil (canceled work measures nothing).
+	if outcome.IsEligible() && latencyMs == nil {
+		return Observation{}, errors.New("evidence outcome requires latency")
 	}
 	if outcome != OutcomeSuccess && outcome != OutcomeUnexpectedStatus {
 		cls := outcome

@@ -94,10 +94,7 @@ func TestHTTPStatusPolicy(t *testing.T) {
 			c := checkerFor(t, stub)
 			tg := targetFor("http://check.example/health", 5)
 			tg.ExpectedStatus = tc.expected
-			o, err := c.Check(context.Background(), tg)
-			if err != nil {
-				t.Fatal(err)
-			}
+			o := c.Check(context.Background(), tg)
 			if o.Outcome != tc.want {
 				t.Fatalf("outcome = %d, want %d", o.Outcome, tc.want)
 			}
@@ -118,10 +115,7 @@ func TestBoundedBody(t *testing.T) {
 			w.Write(make([]byte, 1<<20)) // 1 MiB
 		})
 		c := checkerFor(t, stub)
-		o, err := c.Check(context.Background(), targetFor("http://check.example/", 5))
-		if err != nil {
-			t.Fatal(err)
-		}
+		o := c.Check(context.Background(), targetFor("http://check.example/", 5))
 		if o.Outcome != OutcomeSuccess {
 			t.Fatalf("oversized body must not fail a valid status, got %d", o.Outcome)
 		}
@@ -137,10 +131,7 @@ func TestBoundedBody(t *testing.T) {
 			}
 		})
 		c := checkerFor(t, stub)
-		o, err := c.Check(context.Background(), targetFor("http://check.example/", 5))
-		if err != nil {
-			t.Fatal(err)
-		}
+		o := c.Check(context.Background(), targetFor("http://check.example/", 5))
 		if o.Outcome != OutcomeSuccess {
 			t.Fatalf("got %d", o.Outcome)
 		}
@@ -165,10 +156,7 @@ func TestResponseCleanup(t *testing.T) {
 	// Non-2xx responses must still close the body — cleanup is
 	// status-independent.
 	for i := 0; i < 3; i++ {
-		o, err := c.Check(context.Background(), targetFor("http://check.example/", 5))
-		if err != nil {
-			t.Fatal(err)
-		}
+		o := c.Check(context.Background(), targetFor("http://check.example/", 5))
 		if o.Outcome != OutcomeUnexpectedStatus {
 			t.Fatalf("got %d", o.Outcome)
 		}
@@ -195,7 +183,7 @@ func TestParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Observation, 1)
 	go func() {
-		o, _ := c.Check(ctx, targetFor("http://check.example/", 30))
+		o := c.Check(ctx, targetFor("http://check.example/", 10))
 		done <- o
 	}()
 	time.Sleep(100 * time.Millisecond) // let the request reach the hold
@@ -220,26 +208,56 @@ func TestDeadlineExceeded(t *testing.T) {
 	})
 	c := checkerFor(t, stub)
 	tg := targetFor("http://check.example/", 1) // 1s budget
-	o, err := c.Check(context.Background(), tg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	o := c.Check(context.Background(), tg)
 	if o.Outcome != OutcomeTimeout {
 		t.Fatalf("slow target must produce TIMEOUT, got %d", o.Outcome)
 	}
 }
 
 func TestPolicyBlockedObservation(t *testing.T) {
-	c := newChecker(&fakeResolver{}, nil)
-	o, err := c.Check(context.Background(), targetFor("http://127.0.0.1/", 5))
-	if err != nil {
-		t.Fatal(err)
-	}
+	var dials int
+	c := newChecker(&fakeResolver{}, func(_ context.Context, _, _ string) (net.Conn, error) {
+		dials++
+		return nil, context.DeadlineExceeded
+	})
+	o := c.Check(context.Background(), targetFor("http://127.0.0.1/", 5))
 	if o.Outcome != OutcomePolicyBlocked {
 		t.Fatalf("got %d", o.Outcome)
 	}
 	if o.Outcome.IsEligible() {
 		t.Fatal("policy block must not be target evidence")
 	}
+	if dials != 0 {
+		t.Fatalf("policy-blocked check still dialed %d times", dials)
+	}
 }
 func intPtr(v int) *int { return &v }
+
+// Headers beyond the cap are a collector bound — the check fails
+// closed as an excluded outcome, never a fake status or a hang.
+func TestHeaderCap(t *testing.T) {
+	stub := startHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Pad", strings.Repeat("h", maxHeaderBytes+4096))
+		w.WriteHeader(200)
+	})
+	c := checkerFor(t, stub)
+	o := c.Check(context.Background(), targetFor("http://check.example/", 5))
+	if o.Outcome != OutcomeInternalError {
+		t.Fatalf("oversized headers = %d, want INTERNAL_ERROR exclusion", o.Outcome)
+	}
+}
+
+// Out-of-contract timeouts are collector defects — INTERNAL_ERROR,
+// never eligible TIMEOUT evidence fabricated from bad config.
+func TestTimeoutBound(t *testing.T) {
+	stub := startHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+	c := checkerFor(t, stub)
+	for _, sec := range []int{0, -1, 11, 1000} {
+		o := c.Check(context.Background(), targetFor("http://check.example/", sec))
+		if o.Outcome != OutcomeInternalError {
+			t.Fatalf("timeout %ds = %d, want INTERNAL_ERROR", sec, o.Outcome)
+		}
+	}
+}

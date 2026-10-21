@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A 30x pointing ANYWHERE — private, loopback, another host, another
@@ -25,10 +26,7 @@ func TestRedirectNeverFollowed(t *testing.T) {
 				w.WriteHeader(302)
 			})
 			c := checkerFor(t, stub)
-			o, err := c.Check(context.Background(), targetFor("http://check.example/", 3))
-			if err != nil {
-				t.Fatal(err)
-			}
+			o := c.Check(context.Background(), targetFor("http://check.example/", 3))
 			if o.Outcome != OutcomeUnexpectedStatus {
 				t.Fatalf("redirect must evaluate as target status, got %d", o.Outcome)
 			}
@@ -61,10 +59,15 @@ func TestRedirectUnderCancelNoExtraDial(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Observation, 1)
 	go func() {
-		o, _ := c.Check(ctx, targetFor("http://check.example/", 3))
+		o := c.Check(ctx, targetFor("http://check.example/", 3))
 		done <- o
 	}()
-	o := <-done
+	var o Observation
+	select {
+	case o = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Check did not return")
+	}
 	cancel()
 	if o.Outcome != OutcomeUnexpectedStatus {
 		t.Fatalf("got %d", o.Outcome)

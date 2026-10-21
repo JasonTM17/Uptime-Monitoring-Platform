@@ -237,3 +237,51 @@ func TestResolveValidated(t *testing.T) {
 		}
 	})
 }
+
+// C19 parity: explicit ports are limited to 80/443 and honored
+// literally — a monitor the API accepted must never self-exclude.
+func TestPortPolicyParity(t *testing.T) {
+	cases := []struct {
+		url      string
+		wantPort int
+		wantErr  bool
+	}{
+		{"http://a.example/", 80, false},
+		{"https://a.example/", 443, false},
+		{"http://a.example:80/", 80, false},
+		{"http://a.example:443/", 443, false},
+		{"https://a.example:80/", 80, false},
+		{"https://a.example:443/", 443, false},
+		{"http://a.example:8080/", 0, true},
+		{"http://a.example:0/", 0, true},
+		{"http://a.example:65535/", 0, true},
+	}
+	for _, tc := range cases {
+		pt, err := ParseTarget(tc.url)
+		if tc.wantErr {
+			if !errors.Is(err, errPolicyBlocked) {
+				t.Errorf("%s: want policy denial, got %v", tc.url, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.url, err)
+			continue
+		}
+		if pt.Port != tc.wantPort {
+			t.Errorf("%s: port = %d, want %d", tc.url, pt.Port, tc.wantPort)
+		}
+	}
+}
+
+// IDNA hostnames normalize to A-labels for lookup/SNI/Host — the
+// U-label form can never resolve or match certificates.
+func TestIDNANormalized(t *testing.T) {
+	pt, err := ParseTarget("https://bücher.example/")
+	if err != nil {
+		t.Fatalf("IDN host should parse: %v", err)
+	}
+	if pt.Host != "xn--bcher-kva.example" {
+		t.Fatalf("host = %q, want A-label", pt.Host)
+	}
+}

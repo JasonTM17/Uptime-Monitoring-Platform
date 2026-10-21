@@ -53,6 +53,11 @@ func TestObservationContract(t *testing.T) {
 		{"policy-blocked-with-status", OutcomePolicyBlocked, istatus(200), nil, true, false},
 		{"canceled", OutcomeCanceled, nil, nil, false, true},
 		{"internal", OutcomeInternalError, nil, nil, false, true},
+		{"unexpected-status-0", OutcomeUnexpectedStatus, istatus(0), i64(5), true, false},
+		{"unexpected-status-700", OutcomeUnexpectedStatus, istatus(700), i64(5), true, false},
+		{"success-nil-latency", OutcomeSuccess, istatus(200), nil, true, false},
+		{"dns-nil-latency", OutcomeDNSError, nil, nil, true, false},
+		{"unexpected-nil-latency", OutcomeUnexpectedStatus, istatus(503), nil, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
