@@ -15,6 +15,8 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
   drift, prerequisites Windows/Linux.
 - [Runbook: local và test databases](runbooks/local-database.md):
   Compose profiles, migration job, safe teardown rules.
+- [Runbook: notification delivery](runbooks/notification-delivery.md):
+  pipeline states, causal ordering, operator dead-letter controls.
 - [Testing và verification](testing.md): local gate commands, check
   semantics, CI honesty.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
