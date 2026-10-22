@@ -26,7 +26,7 @@ func RevokeUserSessions(ctx context.Context, conn Beginner,
 	return WithIdempotentPrivilegedTx(ctx, conn, actor,
 		"sessions:manage", "sessions.revoke", target.String(), idemKey, body,
 		[]uuid.UUID{target}, now,
-		func(tx pgx.Tx, subjects []LockedUser, _ map[string]bool) (PrivilegedResult, error) {
+		func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) (PrivilegedResult, error) {
 			if len(subjects) != 1 {
 				return PrivilegedResult{}, ErrSubjectRevoked
 			}
@@ -36,6 +36,13 @@ func RevokeUserSessions(ctx context.Context, conn Beginner,
 			}
 			if len(in.Reason) == 0 || len(in.Reason) > 500 {
 				return PrivilegedResult{}, ErrValidation
+			}
+			isSuper, err := IsSuperAdmin(ctx, tx, target)
+			if err != nil {
+				return PrivilegedResult{}, err
+			}
+			if err := AssertNotProtectedSubject(ctx, tx, perms, isSuper); err != nil {
+				return PrivilegedResult{}, err
 			}
 			revoked, err := tx.Exec(ctx, `
 				UPDATE uptime.sessions SET revoked_at=clock_timestamp()
