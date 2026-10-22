@@ -90,6 +90,8 @@ jobs:
         run: npm --prefix web run lint
       - name: typecheck
         run: npm --prefix web run typecheck
+      - name: api schema parity
+        run: npm --prefix web run api:check
       - name: test
         run: npm --prefix web run test
       - name: build
