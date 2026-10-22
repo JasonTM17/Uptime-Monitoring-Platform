@@ -471,8 +471,19 @@ func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID,
 				     generation=generation+1, updated_at=now()
 				     WHERE id=$1 AND user_id=$2 RETURNING ` + monitorCols
 			} else {
+				// Resume resets a stale DOWN to UNKNOWN: pause closed
+				// the open incident as CONFIG_CHANGED, and the reducer
+				// only opens an incident when health is not already
+				// DOWN — keeping the stale value would wedge an
+				// ongoing outage invisible until it first recovers.
+				// The reset is gated on DOWN: pause+resume is also the
+				// due-now mechanism, so unconditional streak resets
+				// would stop failure streaks from ever accumulating.
 				q = `UPDATE uptime.monitors SET is_paused=false,
 				     next_check_at=clock_timestamp(),
+				     health=CASE WHEN health='DOWN' THEN 'UNKNOWN' ELSE health END,
+				     failure_streak=CASE WHEN health='DOWN' THEN 0 ELSE failure_streak END,
+				     success_streak=CASE WHEN health='DOWN' THEN 0 ELSE success_streak END,
 				     generation=generation+1, updated_at=now()
 				     WHERE id=$1 AND user_id=$2 RETURNING ` + monitorCols
 			}

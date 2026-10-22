@@ -464,6 +464,71 @@ func TestPauseResume(t *testing.T) {
 			t.Fatalf("foreign pause %d", rec.Code)
 		}
 	})
+
+	// Regression: pause+resume is also the due-now mechanism — a
+	// resume must NOT wipe an in-progress streak on a non-DOWN
+	// monitor, or forced/periodic checks could never accumulate the
+	// failure threshold needed to open an incident.
+	t.Run("resume keeps in-progress streaks when health is not DOWN", func(t *testing.T) {
+		if _, err := f.pool.Exec(context.Background(), `
+			UPDATE uptime.monitors SET health='UP', failure_streak=2,
+			    success_streak=1, is_paused=true WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		var gen int64
+		if err := f.pool.QueryRow(context.Background(), `
+			SELECT generation FROM uptime.monitors WHERE id=$1`, id).Scan(&gen); err != nil {
+			t.Fatal(err)
+		}
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/resume",
+			fmt.Sprintf(`{"expected_generation":%d}`, gen), true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resume %d %s", rec.Code, rec.Body.String())
+		}
+		var health string
+		var fs, ss int
+		if err := f.pool.QueryRow(context.Background(), `
+			SELECT health, failure_streak, success_streak
+			FROM uptime.monitors WHERE id=$1`, id).Scan(&health, &fs, &ss); err != nil {
+			t.Fatal(err)
+		}
+		if health != "UP" || fs != 2 || ss != 1 {
+			t.Fatalf("resume wiped streaks: health=%s fs=%d ss=%d",
+				health, fs, ss)
+		}
+	})
+
+	// Resume from DOWN clears health+streaks: pause already closed the
+	// open incident as CONFIG_CHANGED, so the reducer needs a fresh
+	// UNKNOWN->DOWN transition to re-open it on continued failures.
+	t.Run("resume from DOWN resets health and streaks", func(t *testing.T) {
+		if _, err := f.pool.Exec(context.Background(), `
+			UPDATE uptime.monitors SET health='DOWN', failure_streak=3,
+			    success_streak=0, is_paused=true WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		var gen int64
+		if err := f.pool.QueryRow(context.Background(), `
+			SELECT generation FROM uptime.monitors WHERE id=$1`, id).Scan(&gen); err != nil {
+			t.Fatal(err)
+		}
+		rec := a.do(http.MethodPost, "/monitors/"+id+"/resume",
+			fmt.Sprintf(`{"expected_generation":%d}`, gen), true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resume %d %s", rec.Code, rec.Body.String())
+		}
+		var health string
+		var fs, ss int
+		if err := f.pool.QueryRow(context.Background(), `
+			SELECT health, failure_streak, success_streak
+			FROM uptime.monitors WHERE id=$1`, id).Scan(&health, &fs, &ss); err != nil {
+			t.Fatal(err)
+		}
+		if health != "UNKNOWN" || fs != 0 || ss != 0 {
+			t.Fatalf("stale DOWN survived resume: health=%s fs=%d ss=%d",
+				health, fs, ss)
+		}
+	})
 }
 
 func TestConcurrentLifecycle(t *testing.T) {

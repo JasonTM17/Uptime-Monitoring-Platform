@@ -34,7 +34,7 @@ type DeliveryActionInput struct {
 // privileged transaction begins. owner_id never changes, so the
 // pre-read is safe.
 func monitorOwner(ctx context.Context, conn Beginner, monitorID uuid.UUID) (uuid.UUID, error) {
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -117,10 +117,18 @@ func transitionMonitor(ctx context.Context, conn Beginner,
 			} else {
 				// Resume is eligibility only — next_check_at=now()
 				// marks due; the rolling admission gate still gates
-				// the actual check. No check-now privilege.
+				// the actual check. No check-now privilege. A stale
+				// DOWN health resets to UNKNOWN so fresh failures can
+				// re-open an incident (pause closed it CONFIG_CHANGED).
+				// The reset is gated on DOWN: pause+resume is also the
+				// due-now mechanism, so unconditional streak resets
+				// would stop failure streaks from ever accumulating.
 				if _, err := tx.Exec(ctx, `
 					UPDATE uptime.monitors SET is_paused=false,
 					  next_check_at=clock_timestamp(),
+					  health=CASE WHEN health='DOWN' THEN 'UNKNOWN' ELSE health END,
+					  failure_streak=CASE WHEN health='DOWN' THEN 0 ELSE failure_streak END,
+					  success_streak=CASE WHEN health='DOWN' THEN 0 ELSE success_streak END,
 					  generation=generation+1, updated_at=clock_timestamp()
 					WHERE id=$1`, monitorID); err != nil {
 					return PrivilegedResult{}, err
