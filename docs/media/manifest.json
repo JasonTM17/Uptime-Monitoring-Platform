@@ -1,0 +1,141 @@
+{
+  "format": "uptime-media-manifest-v1",
+  "generated_at": "2026-10-22T03:16:26.373Z",
+  "profile": "local",
+  "runtime_sha": "e05d390a541b6cb4606930a597b70acc7691bb80",
+  "browser": "chromium 156.0.8078.4",
+  "harness": "compose.test.yaml (uptime-media): testapp + fixture + postgres:17.11 + vite dev",
+  "seed": {
+    "tag": "media-mviyxr6n",
+    "identities": "synthetic @demo.invalid accounts; no personal data"
+  },
+  "privacy": "allowlisted app routes only; no plans/reports/personal paths in pixels/DOM/metadata",
+  "limitations": [
+    "localRC capture — hosted/production media pending C90 deploy",
+    "GIF flows use deterministic fixture toggles, not real target latency"
+  ],
+  "artifacts": [
+    {
+      "name": "dashboard-desktop",
+      "file": "docs/media/screenshots/dashboard-desktop.png",
+      "route": "/",
+      "viewport": "1440x900",
+      "state": "1UP+1DOWN+open-incident",
+      "sha256": "sha256:c78c1c1aa83c4444832b0805b93820b9e690e8b96831039518aa4eaddc6a76a5",
+      "bytes": 39476,
+      "captured_utc": "2026-10-22T03:16:26.374Z"
+    },
+    {
+      "name": "monitor-detail-desktop",
+      "file": "docs/media/screenshots/monitor-detail-desktop.png",
+      "route": "/monitors/07c625b1-9685-4ba1-91e2-4a666b0d146b",
+      "viewport": "1440x900",
+      "state": "authenticated",
+      "sha256": "sha256:b167eee422b7ff7bdfcfba0e19e6e21e837180573e25b5c327d9ae97e7ce7ab9",
+      "bytes": 54077,
+      "captured_utc": "2026-10-22T03:16:26.374Z"
+    },
+    {
+      "name": "states-and-accessibility",
+      "file": "docs/media/screenshots/states-and-accessibility.png",
+      "route": "/",
+      "viewport": "1440x900",
+      "state": "empty-dashboard+keyboard-focus",
+      "sha256": "sha256:4f9f88404157b6143555ad0881d08f13ccb85b24e7dc8c21a8c4856416d63ec2",
+      "bytes": 28908,
+      "captured_utc": "2026-10-22T03:16:26.375Z"
+    },
+    {
+      "name": "admin-overview-desktop",
+      "file": "docs/media/screenshots/admin-overview-desktop.png",
+      "route": "/admin",
+      "viewport": "1440x900",
+      "state": "authenticated",
+      "sha256": "sha256:0c2e19212894050dccbc756cf07fa8caeb72585aaf52d51372cbd40eddda61fd",
+      "bytes": 32171,
+      "captured_utc": "2026-10-22T03:16:26.375Z"
+    },
+    {
+      "name": "admin-users-desktop",
+      "file": "docs/media/screenshots/admin-users-desktop.png",
+      "route": "/admin/users",
+      "viewport": "1440x900",
+      "state": "authenticated",
+      "sha256": "sha256:53a55e713f9f6c262947bd303542877f3826cd074d2fbad6c520560756dcb96a",
+      "bytes": 34329,
+      "captured_utc": "2026-10-22T03:16:26.375Z"
+    },
+    {
+      "name": "admin-roles-desktop",
+      "file": "docs/media/screenshots/admin-roles-desktop.png",
+      "route": "/admin/roles",
+      "viewport": "1440x900",
+      "state": "authenticated",
+      "sha256": "sha256:e8e67d6da1a87660dbfca4e36a30e471093669fb876b111fe0b3ed470d06c60b",
+      "bytes": 73190,
+      "captured_utc": "2026-10-22T03:16:26.376Z"
+    },
+    {
+      "name": "admin-audit-desktop",
+      "file": "docs/media/screenshots/admin-audit-desktop.png",
+      "route": "/admin/audit",
+      "viewport": "1440x900",
+      "state": "authenticated",
+      "sha256": "sha256:6588b44b83329b11cbeee6f4fa27b33676d012768ad0d45e4dadfc3b7f7501e1",
+      "bytes": 30663,
+      "captured_utc": "2026-10-22T03:16:26.376Z"
+    },
+    {
+      "name": "dashboard-mobile",
+      "file": "docs/media/screenshots/dashboard-mobile.png",
+      "route": "/",
+      "viewport": "390x844",
+      "state": "authenticated",
+      "sha256": "sha256:70ad042fe73e7adf82b54bee7ab8d70ae58733c22f281410ba77e7cc6d66d135",
+      "bytes": 100336,
+      "captured_utc": "2026-10-22T03:16:26.377Z"
+    },
+    {
+      "name": "monitor-editor-mobile",
+      "file": "docs/media/screenshots/monitor-editor-mobile.png",
+      "route": "/monitors (editor open)",
+      "viewport": "390x844",
+      "state": "authenticated",
+      "sha256": "sha256:37b3da585e9cb5a46e5d1725bc4698f9884f7f188cacdf4491abd645e16edfed",
+      "bytes": 60746,
+      "captured_utc": "2026-10-22T03:16:26.377Z"
+    },
+    {
+      "name": "admin-mobile",
+      "file": "docs/media/screenshots/admin-mobile.png",
+      "route": "/admin/users",
+      "viewport": "390x844",
+      "state": "authenticated",
+      "sha256": "sha256:f852849f5761c6256965a88a87a5dcc0a92261ffe0ab71eeff86449c300a13e9",
+      "bytes": 92529,
+      "captured_utc": "2026-10-22T03:16:26.378Z"
+    },
+    {
+      "name": "monitor-incident-recovery",
+      "file": "docs/media/monitor-incident-recovery.gif",
+      "route": "detail page -> forced DOWN (fixture mode) -> check lands -> DOWN state -> forced UP -> recovery checks -> dashboard UP",
+      "viewport": "1280x720@11fps",
+      "state": "recorded-flow",
+      "transcript": "docs/media/monitor-incident-recovery.transcript.md",
+      "sha256": "sha256:5ca90c85a23298d333ab21f52202c521c94a11e3aeb5debb5481ee117959f899",
+      "bytes": 2992127,
+      "captured_utc": "2026-10-22T03:16:26.388Z"
+    },
+    {
+      "name": "admin-role-and-audit",
+      "file": "docs/media/admin-role-and-audit.gif",
+      "route": "admin users -> user detail -> suspend+reason -> audit page shows recorded action",
+      "viewport": "1280x720@11fps",
+      "state": "recorded-flow",
+      "transcript": "docs/media/admin-role-and-audit.transcript.md",
+      "sha256": "sha256:2c16c404642e470dc563e5ce78ad22244e38a344c8499c1c5b394feb5ede1585",
+      "bytes": 2094341,
+      "captured_utc": "2026-10-22T03:16:26.394Z"
+    }
+  ]
+}
