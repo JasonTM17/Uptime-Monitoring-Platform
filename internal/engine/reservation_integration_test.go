@@ -261,14 +261,18 @@ func TestConcurrentGlobalAdmissionCapUsesFreshPostLockSnapshot(t *testing.T) {
 		t.Fatalf("concurrent global cap outcomes: succeeded=%d denied=%d; want 1 each", succeeded, denied)
 	}
 
+	// Count only this test's two monitors — a whole-table window count
+	// could false-fail if an unrelated baseline row ages out mid-test.
 	var committed int
 	if err := observer.QueryRow(ctx, `
 		SELECT count(*) FROM uptime.check_runs
-		WHERE reserved_at > clock_timestamp()-interval '60 seconds'`).Scan(&committed); err != nil {
+		WHERE monitor_id IN ($1, $2)
+		  AND reserved_at > clock_timestamp()-interval '60 seconds'`,
+		monitorA, monitorB).Scan(&committed); err != nil {
 		t.Fatalf("read committed reservations: %v", err)
 	}
-	if committed != caps.GlobalPer60s {
-		t.Fatalf("rolling-window charges=%d, cap=%d (baseline=%d)", committed, caps.GlobalPer60s, baseline)
+	if committed != 1 {
+		t.Fatalf("this test's rolling-window charges=%d, want exactly 1 (baseline=%d)", committed, baseline)
 	}
 }
 
