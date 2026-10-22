@@ -89,7 +89,9 @@ services:
       MIGRATION_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
       # Faster scheduler cadence for test timescales — admission
       # budgets, interval semantics, and thresholds are unchanged.
-      TESTAPP_TICK_MS: "250"
+      # CAP_TICK_MS=1000 pins the release 1s cadence for capacity
+      # runs; the default keeps lifecycle acceptance fast.
+      TESTAPP_TICK_MS: "${CAP_TICK_MS:-250}"
       # Disposable fixed keyring (base64 of 32 zero bytes) — test
       # composition only, never a real destination key.
       CHANNEL_READ_KEYRING: "1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

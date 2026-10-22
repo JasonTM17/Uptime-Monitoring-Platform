@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,6 +147,7 @@ type EngineGauges struct {
 	WorkersBusy int64
 	Workers     int64
 	OwnerAlive  bool
+	Goroutines  int64
 }
 
 // Gauges snapshots the engine's in-memory gauges.
@@ -155,6 +157,7 @@ func (e *Engine) Gauges() EngineGauges {
 		WorkersBusy: e.pool.BusyWorkers(),
 		Workers:     int64(e.pool.WorkerCount()),
 		OwnerAlive:  e.writer.Alive(),
+		Goroutines:  int64(runtime.NumGoroutine()),
 	}
 }
 

@@ -151,6 +151,8 @@ func (m *Metrics) Render(w io.Writer, now time.Time) error {
 	bw("uptime_engine_workers %d\n", g.Workers)
 	bw("# TYPE uptime_engine_workers_busy gauge\n")
 	bw("uptime_engine_workers_busy %d\n", g.WorkersBusy)
+	bw("# TYPE uptime_engine_goroutines gauge\n")
+	bw("uptime_engine_goroutines %d\n", g.Goroutines)
 	bw("# TYPE uptime_engine_owner_alive gauge\n")
 	alive := int64(0)
 	if g.OwnerAlive {

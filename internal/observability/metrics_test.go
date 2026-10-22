@@ -68,6 +68,7 @@ func TestMetricCardinality(t *testing.T) {
 		"uptime_engine_queue_depth":             true,
 		"uptime_engine_workers":                 true,
 		"uptime_engine_workers_busy":            true,
+		"uptime_engine_goroutines":              true,
 		"uptime_engine_owner_alive":             true,
 		"uptime_outbox_deliveries":              true,
 		"uptime_outbox_snapshot_age_seconds":    true,
@@ -87,7 +88,7 @@ func TestMetricCardinality(t *testing.T) {
 		}
 	}
 	// Hard ceiling: counters (1+4+10+4+1) + gauges (4) + outbox (5+1).
-	if series > 30 {
+	if series > 31 {
 		t.Fatalf("series bound exceeded: %d", series)
 	}
 
