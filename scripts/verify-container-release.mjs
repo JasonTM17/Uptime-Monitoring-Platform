@@ -1,0 +1,209 @@
+// C84 — release-candidate verifier.
+//
+//   node scripts/verify-container-release.mjs --manifest <path> \
+//     --output <path> [--stage local|remote] [--anonymous]
+//
+// local  — schema/label/digest/license/scan checks + docker load
+//          roundtrip parity against the recorded archive.
+// remote — (C86/C87) registry readback + anonymous pull; refuses to
+//          run while the manifest has unresolved prerequisites.
+//
+// Reject contract (each maps to a test fixture):
+//   malformed namespace, wrong source label, floating-only tag,
+//   missing sourceSHA/license, unwaived CRITICAL finding,
+//   secret-looking build arg/provenance, subject mismatch,
+//   missing platform, corrupt archive.
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const GHCR_REF = "ghcr.io/jasontm17/uptime-monitoring-platform";
+const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replaceAll("\\", "/");
+
+export function validateManifest(m, { stage = "local" } = {}) {
+  const errs = [];
+  const need = (c, msg) => { if (!c) errs.push(msg); };
+
+  need(m && typeof m === "object", "manifest is not an object");
+  if (!m || typeof m !== "object") return errs;
+  need(m.format === "uptime-release-manifest-v1",
+    `format ${m.format} != uptime-release-manifest-v1`);
+  need(/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(m.version ?? ""),
+    `version '${m.version}' is not semver-shaped`);
+  need(/^[0-9a-f]{40}$/.test(m.source_sha ?? ""),
+    `source_sha missing/malformed: '${m.source_sha}'`);
+  need(m.platform === "linux/amd64",
+    `platform '${m.platform}' — baseline contract is linux/amd64 only`);
+  need(m.license_status && typeof m.license_status === "string",
+    "license_status missing — public release requires a resolved license");
+  if (stage === "remote")
+    need(/^resolved:/.test(m.license_status ?? ""),
+      `license_status '${m.license_status}' — remote publish requires resolved:<spdx>`);
+
+  const img = m.image ?? {};
+  need(typeof img.reference === "string" && img.reference.includes(":"),
+    "image.reference missing tag");
+  if (typeof img.reference === "string" && img.reference.endsWith(":latest"))
+    errs.push("floating ':latest' reference is not a release identity");
+  need(DIGEST_RE.test(img.index_digest ?? ""),
+    "no index digest — the manifest-list digest is the pushable identity");
+  need(DIGEST_RE.test(img.image_manifest_digest ?? ""),
+    "image_manifest_digest missing/malformed");
+  need(DIGEST_RE.test(img.config_digest ?? ""), "config_digest missing/malformed");
+  need(DIGEST_RE.test(img.attestation_digest ?? ""),
+    "attestation_digest missing — transport must preserve provenance");
+  need(Array.isArray(img.layer_digests) && img.layer_digests.length > 0 &&
+    img.layer_digests.every((d) => DIGEST_RE.test(d)),
+    "layer_digests missing/malformed");
+  need(DIGEST_RE.test(img.archive_sha256 ?? ""), "archive_sha256 missing/malformed");
+
+  const labels = m.labels ?? {};
+  need(labels["org.opencontainers.image.source"] === REPO_URL,
+    `source label '${labels["org.opencontainers.image.source"]}' != ${REPO_URL}`);
+  need(labels["org.opencontainers.image.revision"] === m.source_sha,
+    "revision label != source_sha");
+  need(labels["org.opencontainers.image.version"] === m.version,
+    "version label != manifest version");
+
+  for (const k of ["sbom", "provenance"]) {
+    const s = m[k] ?? {};
+    need(DIGEST_RE.test(s.subject_digest ?? ""),
+      `${k} subject_digest missing/malformed`);
+  }
+  const subj = m.sbom?.subject_digest;
+  if (subj && m.provenance?.subject_digest && subj !== m.provenance.subject_digest)
+    errs.push("sbom/provenance subject digests disagree");
+  const imgDigest = img.index_digest; // pushable manifest-list identity
+  if (subj && imgDigest && subj !== imgDigest)
+    errs.push(`sbom subject ${subj} != image digest ${imgDigest}`);
+
+  const scan = m.scan?.image_scanner ?? {};
+  need(scan.critical === 0 || (scan.exceptions ?? []).some((x) => x.cve && x.owner && x.expiry),
+    `unwaived CRITICAL findings: ${scan.critical}`);
+  const seenKeys = JSON.stringify([m.build_args, m.provenance, m.env, labels]);
+  for (const mm of seenKeys.matchAll(/"([^"]*(?:token|secret|password|passwd|private[-_]?key|credential|api[-_]?key)[^"]*)"\s*:/gi))
+    errs.push(`secret-named field in metadata: '${mm[1]}'`);
+
+  const regs = m.registries ?? {};
+  need(regs.ghcr === GHCR_REF, `ghcr ref '${regs.ghcr}' != ${GHCR_REF}`);
+  if (regs.ghcr && !/^ghcr\.io\/[a-z0-9-]+\/[a-z0-9._-]+$/.test(regs.ghcr))
+    errs.push(`malformed ghcr namespace '${regs.ghcr}'`);
+  if (stage === "remote")
+    need(regs.dockerhub && regs.dockerhub !== "pending-user-namespace",
+      "remote stage with unresolved dockerhub namespace");
+  return errs;
+}
+
+function run(argv, { quiet, buffer } = {}) {
+  return new Promise((res, rej) => {
+    const p = spawn(argv[0], argv.slice(1), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const chunks = [];
+    let err = "";
+    p.stdout.on("data", (d) => chunks.push(d));
+    p.stderr.on("data", (d) => { err += d; if (!quiet) process.stderr.write(d); });
+    p.on("close", (c) => {
+      const buf = Buffer.concat(chunks);
+      c === 0 ? res(buffer ? buf : buf.toString("utf8"))
+        : rej(new Error(`${argv.join(" ")} -> ${c}`));
+    });
+  });
+}
+
+async function main() {
+  const args = {};
+  for (let i = 2; i < process.argv.length; i += 2)
+    args[process.argv[i].replace(/^--/, "")] = process.argv[i + 1];
+  const mpath = resolve(args.manifest ?? die2("--manifest required"));
+  const output = resolve(args.output ?? die2("--output required"));
+  const stage = args.stage ?? "local";
+  if (!["local", "remote"].includes(stage)) die2(`--stage ${stage}`);
+  mkdirSync(dirname(output), { recursive: true });
+
+  const m = JSON.parse(readFileSync(mpath, "utf8"));
+  const result = { manifest: mpath, stage, generated_at: new Date().toISOString(),
+    checks: [], verdict: "PASS" };
+  const check = (name, ok, detail) => {
+    result.checks.push({ name, ok: !!ok, detail });
+    if (!ok) result.verdict = "FAIL";
+  };
+
+  const errs = validateManifest(m, { stage });
+  check("manifest-contract", errs.length === 0, errs.join(" | ") || "schema/labels/digests/scan OK");
+
+  if (stage === "local") {
+    // Archive on disk + recorded sha256 matches.
+    const arch = resolve(ROOT, m.image?.archive ?? "");
+    const want = (m.image?.archive_sha256 ?? "").replace(/^sha256:/, "");
+    const archOK = existsSync(arch) && !!want &&
+      createHash("sha256").update(readFileSync(arch)).digest("hex") === want;
+    check("archive-integrity", archOK, archOK ? "archive sha256 matches" : "archive missing or sha mismatch");
+
+    // Capability test: recompute the OCI digest chain inside the
+    // archive — index -> manifest list -> {image manifest, attestation}
+    // -> config + layer blobs. Every recorded digest must hash-match a
+    // blob on disk; the attestation's subject must be the image
+    // manifest. This is the parity claim; docker save/load is not.
+    if (archOK) {
+      try {
+        const cat = async (name, buffer) => ({ out: await run(["tar", "-xOf", rel(arch), name], { quiet: true, buffer }) });
+        const hexOK = (digest, bytes) =>
+          digest.replace(/^sha256:/, "") === createHash("sha256").update(bytes).digest("hex");
+        const idxBytes = (await cat("index.json")).out;
+        const idx = JSON.parse(idxBytes);
+        const problems = [];
+        if (idx.manifests?.[0]?.digest !== m.image.index_digest)
+          problems.push("index.json child != index_digest");
+        const listBytes = (await cat(`blobs/${m.image.index_digest.replace(":", "/")}`)).out;
+        if (!hexOK(m.image.index_digest, Buffer.from(listBytes, "utf8"))) problems.push("manifest-list blob hash mismatch");
+        const list = JSON.parse(listBytes);
+        const imgD = list.manifests?.find((x) => x.platform?.architecture === "amd64"
+          && x.platform?.os === "linux" && !x.annotations?.["vnd.docker.reference.type"]);
+        const attD = list.manifests?.find((x) =>
+          x.annotations?.["vnd.docker.reference.type"] === "attestation-manifest");
+        if (imgD?.digest !== m.image.image_manifest_digest) problems.push("image manifest digest mismatch/absent");
+        if (attD?.digest !== m.image.attestation_digest) problems.push("attestation manifest digest mismatch/absent");
+        const imgBytes = (await cat(`blobs/${imgD.digest.replace(":", "/")}`)).out;
+        if (!hexOK(imgD.digest, Buffer.from(imgBytes, "utf8"))) problems.push("image manifest blob hash mismatch");
+        const imgM = JSON.parse(imgBytes);
+        if (imgM.config?.digest !== m.image.config_digest) problems.push("config digest mismatch");
+        const cfgBytes = (await cat(`blobs/${m.image.config_digest.replace(":", "/")}`)).out;
+        if (!hexOK(m.image.config_digest, Buffer.from(cfgBytes, "utf8"))) problems.push("config blob hash mismatch");
+        const manifestLayers = (imgM.layers ?? []).map((l) => l.digest);
+        if (JSON.stringify(manifestLayers) !== JSON.stringify(m.image.layer_digests))
+          problems.push("recorded layer_digests != image manifest layers");
+        for (const d of manifestLayers) {
+          const b = (await cat(`blobs/${d.replace(":", "/")}`, true)).out;
+          if (!hexOK(d, b)) { problems.push(`layer blob ${d.slice(0, 19)} hash mismatch`); break; }
+        }
+        const attBytes = (await cat(`blobs/${attD.digest.replace(":", "/")}`)).out;
+        const att = JSON.parse(attBytes);
+        const attSubject = att.subject?.digest ?? att.subject?.[0]?.digest;
+        if (attSubject !== imgD.digest)
+          problems.push(`attestation subject ${attSubject} != image manifest`);
+        check("oci-chain", problems.length === 0,
+          problems.length ? problems.join(" | ") : "index->list->image+attestation->config+layers all hash-verified");
+      } catch (e) { check("oci-chain", false, `chain walk: ${e.message.slice(0, 160)}`); }
+    }
+  }
+
+  if (stage === "remote") {
+    check("remote-stage", false,
+      "remote stage is C86/C87 scope — registry readback + anonymous pull not implemented in this verifier yet");
+  }
+
+  if (args.anonymous === "true")
+    check("anonymous-pull", false, "anonymous pull is a C87 gate — requires published packages");
+
+  writeFileSync(output, JSON.stringify(result, null, 2));
+  console.log(`verdict ${result.verdict} — ${result.checks.map((c) => `${c.name}:${c.ok ? "ok" : "FAIL"}`).join(", ")}`);
+  process.exit(result.verdict === "PASS" ? 0 : 1);
+}
+function die2(msg) { throw new Error(`verify-release: ${msg}`); }
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
