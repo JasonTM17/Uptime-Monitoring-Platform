@@ -469,6 +469,7 @@ try {
         s["uptime_engine_admission_denials_total{reason=queue_full}"] ?? ""].join(",")));
   writeFileSync(resolve(output).replace(/\.json$/, "-samples.csv"), csv.join("\n"));
   console.log(`\nverdict ${report.verdict} — wrote ${output}`);
+  if (report.verdict !== "PASS") process.exitCode = 1;
 } finally {
   samplerAlive = false;
   if (args.keep !== "true") await compose("down", "-v").catch(() => {});

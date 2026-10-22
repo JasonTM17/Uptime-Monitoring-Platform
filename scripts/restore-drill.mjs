@@ -355,6 +355,7 @@ try {
   report.verdict = steps.every((s) => s.ok) ? "PASS" : "FAIL";
   writeFileSync(resolve(output), JSON.stringify(report, null, 2));
   console.log(`\nverdict ${report.verdict} — wrote ${output}`);
+  if (report.verdict !== "PASS") process.exitCode = 1;
 } catch (e) {
   console.error(e.message);
   report.verdict = "FAIL";
