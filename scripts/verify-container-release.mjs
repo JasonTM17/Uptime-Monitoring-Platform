@@ -192,8 +192,53 @@ async function main() {
   }
 
   if (stage === "remote") {
-    check("remote-stage", false,
-      "remote stage is C86/C87 scope — registry readback + anonymous pull not implemented in this verifier yet");
+    // C86 readback: package existence/association/visibility + remote
+    // digest parity. Metadata only — anonymous pull/run is C87.
+    const ver = m.version;
+    // --- GHCR: gh api package readback (authenticated, read-only) ---
+    try {
+      const pkgs = JSON.parse(await run(["gh", "api",
+        "users/JasonTM17/packages?package_type=container&per_page=100"], { quiet: true }));
+      const pkg = pkgs.find((p) => p.name === "uptime-monitoring-platform");
+      if (!pkg) {
+        check("ghcr-package", false, "package ghcr.io/jasontm17/uptime-monitoring-platform not found — nothing published");
+      } else {
+        const detail = JSON.parse(await run(["gh", "api",
+          `user/packages/container/${pkg.name}`], { quiet: true }).catch(() => "{}"));
+        const assoc = detail.repository?.full_name ?? pkg.repository?.full_name ?? null;
+        const vis = detail.visibility ?? pkg.visibility ?? "unknown";
+        check("ghcr-package", true, `exists; visibility=${vis}`);
+        check("ghcr-association", assoc === "JasonTM17/Uptime-Monitoring-Platform",
+          `repository link: ${assoc}`);
+        check("ghcr-visibility", vis === "public", `visibility=${vis} (contract requires public)`);
+        // Remote digest parity via imagetools (no pull).
+        try {
+          const insp = await run(["docker", "buildx", "imagetools", "inspect",
+            `${GHCR_REF}:${ver}`], { quiet: true });
+          const d = /Digest:\s*(sha256:[0-9a-f]{64})/.exec(insp)?.[1];
+          check("ghcr-digest-parity", d === m.image.index_digest,
+            d ? `remote ${d.slice(0, 19)}… vs recorded ${m.image.index_digest.slice(0, 19)}…`
+              : "no digest in inspect output");
+        } catch (e) { check("ghcr-digest-parity", false, `inspect: ${e.message.slice(0, 120)}`); }
+      }
+    } catch (e) { check("ghcr-package", false, `gh api: ${e.message.slice(0, 120)}`); }
+    // --- Docker Hub: anonymous REST readback ---
+    const dhNs = m.registries?.dockerhub;
+    if (!dhNs || dhNs === "pending-user-namespace") {
+      check("dockerhub-package", false, "namespace unresolved (C83 prerequisite)");
+    } else {
+      try {
+        const r = await fetch(`https://hub.docker.com/v2/repositories/${dhNs}`).then((x) => x.json());
+        const repoName = dhNs.split("/").pop();
+        check("dockerhub-package", r.name === repoName, `repo ${r.name ?? "not found"}`);
+        check("dockerhub-visibility", r.is_private === false, `is_private=${r.is_private}`);
+        const t = await fetch(`https://hub.docker.com/v2/repositories/${dhNs}/tags/${ver}`)
+          .then((x) => x.json()).catch(() => null);
+        const dDig = t?.digest ?? t?.images?.[0]?.digest;
+        check("dockerhub-digest-parity", dDig === m.image.index_digest,
+          dDig ? `remote ${dDig.slice(0, 19)}…` : `tag ${ver} not found`);
+      } catch (e) { check("dockerhub-package", false, `hub api: ${e.message.slice(0, 120)}`); }
+    }
   }
 
   if (args.anonymous === "true")
