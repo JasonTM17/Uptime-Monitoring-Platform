@@ -1,0 +1,10 @@
+# Test-harness build context (Dockerfile.test). Same deny-by-default
+# contract as .dockerignore, but the test composition binaries ARE
+# required inputs here — the release context excludes them instead.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**

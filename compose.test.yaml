@@ -1,0 +1,130 @@
+name: uptime-accept
+
+# C79 disposable acceptance composition. Two networks, disjoint roles:
+#
+#   publicnet — internal-only bridge squatting the public prefix
+#     93.184.216.0/24 (example.com's Edgecast range). Squatting a real
+#     public /24 inside an internal-only network is the ONE honest
+#     way to exercise the unchanged destination policy: every lab-
+#     friendly prefix (TEST-NET-*, 198.18/15 benchmarking, ULA, doc
+#     ranges) is correctly denied as special-purpose. The fixture
+#     lives here under the network-scoped alias `target-public`, so
+#     the testapp's resolver returns ONLY public global-unicast
+#     addresses for `*.fixture` targets. Nothing can route out —
+#     `internal: true` removes all external connectivity.
+#
+#   control — ordinary NAT bridge. Host-facing published ports and
+#     the database live here. Internal networks cannot serve
+#     published ports, so port binds route through this network
+#     unambiguously.
+#
+# Nothing shares volumes, credentials, or identities with the local
+# dev stack; the database is tmpfs and `down -v` removes everything
+# this file owns.
+
+networks:
+  publicnet:
+    internal: true
+    ipam:
+      config:
+        - subnet: 93.184.216.0/24
+  control:
+
+services:
+  db:
+    image: postgres:17.11
+    environment:
+      POSTGRES_USER: accept
+      POSTGRES_PASSWORD: accept-dummy-password # disposable, non-secret
+      POSTGRES_DB: accept
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accept -d accept"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks: [control]
+
+  migrate:
+    image: migrate/migrate:v4.20.1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./scripts/migrate-entrypoint.sh:/scripts/migrate-entrypoint.sh:ro
+    entrypoint: ["sh", "/scripts/migrate-entrypoint.sh"]
+    environment:
+      DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
+      MIGRATE_TARGET: test
+      MIGRATE_ALLOW_DESTRUCTIVE: "false"
+    networks: [control]
+
+  # Declares the build so `docker compose build` produces the shared
+  # harness image once; `app` and `target` reuse it by name.
+  harness:
+    image: uptime-accept-harness:local
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    profiles: ["build-only"]
+    command: ["true"]
+    networks: [control]
+
+  app:
+    image: uptime-accept-harness:local
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["/harness-bin/testapp"]
+    environment:
+      APP_ENV: local
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
+      ENGINE_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
+      # Faster scheduler cadence for test timescales — admission
+      # budgets, interval semantics, and thresholds are unchanged.
+      TESTAPP_TICK_MS: "250"
+      # Disposable fixed keyring (base64 of 32 zero bytes) — test
+      # composition only, never a real destination key.
+      CHANNEL_READ_KEYRING: "1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      CHANNEL_WRITE_KEY_VERSION: "1"
+      CHANNEL_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      # Fixed CSRF key keeps tokens valid across app restarts in a
+      # run; an ephemeral key would also be correct.
+      CSRF_SIGNING_KEY: "accept-test-csrf-key-not-secret"
+      # Exact-origin allowlist: the testapp API origin (script/API
+      # calls) and the vite dev-server origin (browser lane). Both
+      # are loopback-only and disposable.
+      TRUSTED_ORIGINS: "http://localhost:18080,http://localhost:5173"
+      METRICS_ENABLED: "true"
+      # Headroom for harness registration/login volume from the one
+      # docker gateway source; the fixed-window limiter code path is
+      # unchanged.
+      REGISTER_IP_ATTEMPTS_PER_MIN: "100"
+      LOGIN_IP_ATTEMPTS_PER_MIN: "100"
+    ports:
+      - "127.0.0.1:18080:8080"
+    networks: [control, publicnet]
+
+  target:
+    image: uptime-accept-harness:local
+    depends_on:
+      app:
+        condition: service_started
+    command: ["/harness-bin/fixture"]
+    networks:
+      publicnet:
+        # Alias exists ONLY on publicnet: resolving "target-public"
+        # can never return the control-network (private) address.
+        aliases: ["target-public"]
+      control: {}
+    ports:
+      # Mode control plane — the :80 check listener is reachable only
+      # on publicnet, exactly like a real public target.
+      - "127.0.0.1:19080:9080"

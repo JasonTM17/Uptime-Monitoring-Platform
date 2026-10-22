@@ -10,3 +10,9 @@
 !cmd/**
 !internal/
 !internal/**
+
+# Acceptance-harness binaries (C79): never part of the release build
+# context or image. The test composition compiles them through
+# Dockerfile.test, which has its own .dockerignore.
+cmd/testapp/
+cmd/fixture/

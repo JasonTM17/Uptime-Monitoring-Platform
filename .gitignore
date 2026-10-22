@@ -69,6 +69,7 @@ tmp/
 *.coverprofile
 coverage.out
 *.test
+!Dockerfile.test
 *.exe
 *.prof
 

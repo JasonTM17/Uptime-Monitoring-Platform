@@ -9,7 +9,10 @@ export default defineConfig({
   webServer: {
     command: "npm run dev",
     url: "http://localhost:5173",
-    reuseExistingServer: true,
+    // Acceptance (CI=1) must spawn its own dev server so the
+    // E2E_API_TARGET proxy env applies; reusing a stale dev server
+    // would silently proxy /api to the wrong upstream.
+    reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },
   projects: [

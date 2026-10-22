@@ -46,6 +46,10 @@ export function MonitorDetailPage() {
     queryKey: ["monitor", user?.id, id],
     queryFn: ({ signal }) => getMonitor(id, signal),
     enabled: !!id,
+    // Health is live evidence — poll like the dashboard does so the
+    // badge never goes silently stale between user actions.
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: false,
   });
   const channels = useQuery({
     queryKey: ["channels", user?.id],
