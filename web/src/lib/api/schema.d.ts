@@ -454,7 +454,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** (C50) Owner usage summary — typed quota schema */
+        /** Owner usage summary — typed quota schema */
         get: operations["plannedSummary"];
         put?: never;
         post?: never;
@@ -1632,7 +1632,7 @@ export interface operations {
                     /**
                      * @example {
                      *       "data": {
-                     *         "csrf_token": "9f3d2c1b-example-token"
+                     *         "csrf_token": "<csrf-token>"
                      *       }
                      *     }
                      */
