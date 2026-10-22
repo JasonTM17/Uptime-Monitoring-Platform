@@ -5,8 +5,10 @@ what the platform must do, what it must not do, and where each requirement is
 verified. It intentionally does not reproduce or link the project's private
 planning artifacts; requirement IDs below are the stable public references.
 
-Status: accepted scope, implementation in progress. Statements below are
-requirements and design commitments, not claims that behavior already exists.
+Status: Local implementation and R18 acceptance are verified. Free hosting
+(R19), container publication (R24), and final GitHub About/release actions
+(R20) remain pending. This document defines the full target scope; it does not
+claim hosted availability or public container images.
 
 ## Product summary
 

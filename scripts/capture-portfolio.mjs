@@ -21,6 +21,7 @@ const COMPOSE = ["compose", "-p", "uptime-media", "-f", "compose.test.yaml"];
 const MEDIA = resolve(ROOT, "docs/media");
 const SHOTS = resolve(MEDIA, "screenshots");
 const RAW = resolve(ROOT, "artifacts/media");
+let viteProcess;
 const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replaceAll("\\", "/");
 
 function run(argv, { input, quiet, env, cwd } = {}) {
@@ -39,6 +40,17 @@ function run(argv, { input, quiet, env, cwd } = {}) {
 const sh = (args, input) => run(["docker", ...COMPOSE, "exec", "-T", "app", ...args], { input });
 const die = (m) => { throw new Error(`capture-portfolio: ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function stopVite() {
+  const child = viteProcess;
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
+  child.kill();
+  await Promise.race([exited, sleep(3000)]);
+  if (child.exitCode === null) {
+    child.kill("SIGKILL");
+    await Promise.race([exited, sleep(1000)]);
+  }
+}
 async function poll(fn, { until, timeoutMs = 15000, every = 500 } = {}) {
   const t0 = Date.now();
   for (;;) {
@@ -150,14 +162,20 @@ async function main() {
   await forceCheck(m1.id); await forceCheck(m2.id);
   // Drive m2 DOWN -> real incident for dashboard/detail/incidents views.
   await setMode("down");
-  await forceCheck(m2.id); await forceCheck(m2.id);
+  await forceCheck(m2.id); await forceCheck(m2.id); await forceCheck(m2.id);
+  const m1State = (await alice.req("GET", `/monitors/${m1.id}`)).json?.data;
+  const m2State = (await alice.req("GET", `/monitors/${m2.id}`)).json?.data;
+  const openIncidents = (await alice.req("GET",
+    `/monitors/${m2.id}/incidents?state=open`)).json?.data?.incidents ?? [];
+  if (m1State?.health !== "UP" || m2State?.health !== "DOWN" || openIncidents.length !== 1)
+    die(`dashboard fixture state mismatch: m1=${m1State?.health} m2=${m2State?.health} open=${openIncidents.length}`);
   await setMode("up");
 
   // ---------- vite ----------
   console.log("[capture] vite dev");
-  const vite = spawn(process.platform === "win32" ? "npm.cmd" : "npm",
-    ["--prefix", "web", "run", "dev", "--", "--port", "5173", "--strictPort"],
-    { cwd: ROOT, stdio: "ignore", shell: process.platform === "win32",
+  viteProcess = spawn(process.execPath,
+    [resolve(ROOT, "web/node_modules/vite/bin/vite.js"), "--port", "5173", "--strictPort"],
+    { cwd: resolve(ROOT, "web"), stdio: "ignore",
       env: { ...process.env, E2E_API_TARGET: API } });
   await poll(() => fetch(UI).then((r) => r.ok), { timeoutMs: 30000 });
 
@@ -178,7 +196,7 @@ async function main() {
     await page.waitForLoadState("networkidle").catch(() => {});
     await page.screenshot({ path, fullPage: false });
     shots.push({ name, file: rel(path), route, viewport: mobile ? "390x844" : "1440x900",
-      state: state ?? "authenticated" });
+      state: state ?? "authenticated", captured_utc: new Date().toISOString() });
     console.log(`[capture] ${name}`);
   };
 
@@ -212,7 +230,8 @@ async function main() {
   await uiLogin(pm, seed.alice);
   await pm.goto(`${UI}/`); await snap(pm, "dashboard-mobile", "/", { mobile: true });
   await pm.goto(`${UI}/monitors`);
-  await pm.getByRole("button", { name: /new monitor|add monitor|create/i }).first().click().catch(() => {});
+  await pm.getByRole("heading", { name: "New monitor" }).waitFor({ state: "visible" });
+  await pm.getByLabel("Name").waitFor({ state: "visible" });
   await snap(pm, "monitor-editor-mobile", "/monitors (editor open)", { mobile: true });
   const pm2 = await (await browser.newContext({ viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2, isMobile: true, hasTouch: true })).newPage();
@@ -237,6 +256,7 @@ async function main() {
   await g1p.goto(`${UI}/`);
   await g1p.waitForLoadState("networkidle"); await g1p.waitForTimeout(1500);
   const g1v = g1p.video(); await g1.close();
+  const g1CapturedUtc = new Date().toISOString();
   const g1src = await g1v.path();
 
   // ---------- GIF 2: admin suspend -> denied -> audit ----------
@@ -244,36 +264,74 @@ async function main() {
   const g2 = await browser.newContext({ viewport: { width: 1280, height: 720 },
     recordVideo: { dir: RAW, size: { width: 1280, height: 720 } } });
   const g2p = await g2.newPage();
-  const bobId = (await admin.req("GET", "/admin/users?q=bob")).json.data?.users?.[0]?.id;
+  const users = (await admin.req("GET",
+    `/admin/users?q=${encodeURIComponent(seed.bob.email)}&limit=50`)).json?.data?.users ?? [];
+  const bobUser = users.find((user) => user.email === seed.bob.email);
+  if (!bobUser?.id) die("admin user inventory did not return the seeded Bob account");
+  const bobBefore = await admin.req("GET", `/admin/users/${bobUser.id}`);
+  if (bobBefore.status !== 200 || bobBefore.json?.data?.status !== "ACTIVE" ||
+      !Number.isInteger(bobBefore.json?.data?.version))
+    die(`seeded Bob is not an active, versioned account: ${bobBefore.status}`);
   await uiLogin(g2p, seed.admin);
   await g2p.goto(`${UI}/admin/users`);
   await g2p.waitForLoadState("networkidle"); await g2p.waitForTimeout(1000);
-  if (bobId) {
-    await g2p.goto(`${UI}/admin/users/${bobId}`);
-    await g2p.waitForLoadState("networkidle");
-    await g2p.getByRole("button", { name: /suspend/i }).first().click().catch(() => {});
-    await g2p.waitForTimeout(800);
-    const reason = g2p.getByLabel(/reason/i);
-    if (await reason.count()) await reason.fill("demo suspension for portfolio");
-    await g2p.getByRole("button", { name: /confirm|suspend/i }).last().click().catch(() => {});
-    await g2p.waitForTimeout(1200);
+  await g2p.goto(`${UI}/admin/users/${bobUser.id}`);
+  await g2p.getByRole("heading", { name: seed.bob.email }).waitFor({ state: "visible" });
+  await g2p.getByRole("button", { name: "Suspend…" }).click();
+  const actionDialog = g2p.getByRole("dialog", { name: "Suspend account" });
+  await actionDialog.getByLabel(/Reason/).fill("demo suspension for portfolio");
+  await actionDialog.getByRole("button", { name: "Suspend", exact: true }).click();
+
+  const reauthDialog = g2p.getByRole("dialog", { name: /confirm it.s you/i });
+  const firstOutcome = await poll(async () => {
+    if (await reauthDialog.isVisible()) return "reauth";
+    const r = await admin.req("GET", `/admin/users/${bobUser.id}`);
+    return r.status === 200 && r.json?.data?.status === "DISABLED" ? "disabled" : null;
+  }, { until: (state) => state === "reauth" || state === "disabled",
+    timeoutMs: 15000, every: 200 });
+  if (firstOutcome === "reauth") {
+    await reauthDialog.getByLabel("Password").fill(seed.admin.password);
+    await reauthDialog.getByRole("button", { name: "Continue" }).click();
+    await reauthDialog.waitFor({ state: "hidden", timeout: 15000 });
+    await actionDialog.getByRole("button", { name: "Suspend", exact: true }).click();
   }
+  if (firstOutcome !== "disabled") {
+    await poll(async () => {
+      const r = await admin.req("GET", `/admin/users/${bobUser.id}`);
+      return r.status === 200 && r.json?.data?.status === "DISABLED" ? r.json.data : null;
+    }, { timeoutMs: 15000, every: 200 });
+  }
+  await actionDialog.waitFor({ state: "hidden", timeout: 15000 });
+  const audit = await poll(async () => {
+    const r = await admin.req("GET",
+      `/admin/audit-events?action=account.suspend&subject=${encodeURIComponent(bobUser.id)}&limit=50`);
+    if (r.status !== 200) return null;
+    return r.json?.data?.events?.find((event) => event.action === "account.suspend" &&
+      event.subject_id === bobUser.id && event.outcome === "SUCCESS" &&
+      event.reason === "demo suspension for portfolio") ?? null;
+  }, { timeoutMs: 15000, every: 200 });
+  if (!audit) die("admin suspension did not produce its expected successful audit event");
   await g2p.goto(`${UI}/admin/audit`);
+  await g2p.getByRole("table").getByText("account.suspend", { exact: true })
+    .waitFor({ state: "visible", timeout: 15000 });
   await g2p.waitForLoadState("networkidle"); await g2p.waitForTimeout(1500);
   const g2v = g2p.video(); await g2.close();
+  const g2CapturedUtc = new Date().toISOString();
   const g2src = await g2v.path();
 
   await browser.close();
-  vite.kill();
+  await stopVite();
   await run(["docker", ...COMPOSE, "down", "-v", "--remove-orphans"], { quiet: true }).catch(() => {});
 
   // ---------- encode GIFs ----------
   console.log("[capture] ffmpeg encode");
   const gifs = [
     { src: g1src, out: "monitor-incident-recovery.gif", transcript: "monitor-incident-recovery.transcript.md",
-      flow: "detail page -> forced DOWN (fixture mode) -> check lands -> DOWN state -> forced UP -> recovery checks -> dashboard UP" },
+      flow: "detail page -> forced DOWN (fixture mode) -> check lands -> DOWN state -> forced UP -> recovery checks -> dashboard UP",
+      captured_utc: g1CapturedUtc },
     { src: g2src, out: "admin-role-and-audit.gif", transcript: "admin-role-and-audit.transcript.md",
-      flow: "admin users -> user detail -> suspend+reason -> audit page shows recorded action" },
+      flow: "admin users -> user detail -> suspend+reason -> audit page shows recorded action",
+      captured_utc: g2CapturedUtc },
   ];
   for (const g of gifs) {
     const dst = resolve(MEDIA, g.out);
@@ -289,7 +347,7 @@ async function main() {
       `No time-stretch: actions shown in real order; fixture waits are API-polled, not slept.\n`);
     shots.push({ name: g.out.replace(".gif", ""), file: rel(dst),
       route: g.flow, viewport: "1280x720@11fps", state: "recorded-flow",
-      transcript: rel(resolve(MEDIA, g.transcript)) });
+      transcript: rel(resolve(MEDIA, g.transcript)), captured_utc: g.captured_utc });
   }
 
   // ---------- manifest ----------
@@ -309,7 +367,6 @@ async function main() {
       ...s,
       sha256: `sha256:${createHash("sha256").update(readFileSync(resolve(ROOT, s.file))).digest("hex")}`,
       bytes: statSync(resolve(ROOT, s.file)).size,
-      captured_utc: new Date().toISOString(),
     })),
   };
   mkdirSync(dirname(output), { recursive: true });
@@ -319,12 +376,7 @@ async function main() {
 
 main().catch(async (e) => {
   console.error(e.message ?? e);
-  for (const p of ["5173"])
-    try {
-      const { execSync } = await import("node:child_process");
-      if (process.platform === "win32")
-        execSync(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${p} ^| findstr LISTENING') do taskkill /PID %a /F`, { stdio: "ignore" });
-    } catch {}
+  await stopVite().catch(() => {});
   await run(["docker", ...COMPOSE, "down", "-v", "--remove-orphans"], { quiet: true }).catch(() => {});
   process.exit(1);
 });

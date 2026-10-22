@@ -1,12 +1,12 @@
 {
   "format": "uptime-media-manifest-v1",
-  "generated_at": "2026-10-22T03:16:26.373Z",
+  "generated_at": "2026-10-22T05:14:57.990Z",
   "profile": "local",
-  "runtime_sha": "e05d390a541b6cb4606930a597b70acc7691bb80",
+  "runtime_sha": "da5bdf5f07cbd606a44f20e9670e19c32ff26916",
   "browser": "chromium 156.0.8078.4",
   "harness": "compose.test.yaml (uptime-media): testapp + fixture + postgres:17.11 + vite dev",
   "seed": {
-    "tag": "media-mviyxr6n",
+    "tag": "media-mvj3660p",
     "identities": "synthetic @demo.invalid accounts; no personal data"
   },
   "privacy": "allowlisted app routes only; no internal plan/report/personal paths in pixels/DOM/metadata",
@@ -21,19 +21,19 @@
       "route": "/",
       "viewport": "1440x900",
       "state": "1UP+1DOWN+open-incident",
-      "sha256": "sha256:c78c1c1aa83c4444832b0805b93820b9e690e8b96831039518aa4eaddc6a76a5",
-      "bytes": 39476,
-      "captured_utc": "2026-10-22T03:16:26.374Z"
+      "captured_utc": "2026-10-22T05:14:24.255Z",
+      "sha256": "sha256:f7a088685b8e7bb064b4147293541b1d5caebbd1234cc7d53fbf19da332b150c",
+      "bytes": 43986
     },
     {
       "name": "monitor-detail-desktop",
       "file": "docs/media/screenshots/monitor-detail-desktop.png",
-      "route": "/monitors/07c625b1-9685-4ba1-91e2-4a666b0d146b",
+      "route": "/monitors/5688d011-bde6-4b5c-a2d8-ec36747a912b",
       "viewport": "1440x900",
       "state": "authenticated",
-      "sha256": "sha256:b167eee422b7ff7bdfcfba0e19e6e21e837180573e25b5c327d9ae97e7ce7ab9",
-      "bytes": 54077,
-      "captured_utc": "2026-10-22T03:16:26.374Z"
+      "captured_utc": "2026-10-22T05:14:24.957Z",
+      "sha256": "sha256:880c8967147ab9fec6303c3f621c2dd4f1dcb53829456db47cc4b347f8410298",
+      "bytes": 54266
     },
     {
       "name": "states-and-accessibility",
@@ -41,9 +41,9 @@
       "route": "/",
       "viewport": "1440x900",
       "state": "empty-dashboard+keyboard-focus",
-      "sha256": "sha256:4f9f88404157b6143555ad0881d08f13ccb85b24e7dc8c21a8c4856416d63ec2",
-      "bytes": 28908,
-      "captured_utc": "2026-10-22T03:16:26.375Z"
+      "captured_utc": "2026-10-22T05:14:26.273Z",
+      "sha256": "sha256:794cc53b27b4ef815e8e38f9946893a3022e0af0b36efd8d2a1e3ebed7dc0e6b",
+      "bytes": 29152
     },
     {
       "name": "admin-overview-desktop",
@@ -51,9 +51,9 @@
       "route": "/admin",
       "viewport": "1440x900",
       "state": "authenticated",
-      "sha256": "sha256:0c2e19212894050dccbc756cf07fa8caeb72585aaf52d51372cbd40eddda61fd",
-      "bytes": 32171,
-      "captured_utc": "2026-10-22T03:16:26.375Z"
+      "captured_utc": "2026-10-22T05:14:27.505Z",
+      "sha256": "sha256:8cb3bf96f511a996aa1a8784044e8f9bf14aeef9c5a3269b748d99bca6ff29e8",
+      "bytes": 32177
     },
     {
       "name": "admin-users-desktop",
@@ -61,9 +61,9 @@
       "route": "/admin/users",
       "viewport": "1440x900",
       "state": "authenticated",
-      "sha256": "sha256:53a55e713f9f6c262947bd303542877f3826cd074d2fbad6c520560756dcb96a",
-      "bytes": 34329,
-      "captured_utc": "2026-10-22T03:16:26.375Z"
+      "captured_utc": "2026-10-22T05:14:28.188Z",
+      "sha256": "sha256:852b3ff1a32982c41295762f0ecb080cacf13b0d9a069004af7dc68300f083fd",
+      "bytes": 34506
     },
     {
       "name": "admin-roles-desktop",
@@ -71,9 +71,9 @@
       "route": "/admin/roles",
       "viewport": "1440x900",
       "state": "authenticated",
-      "sha256": "sha256:e8e67d6da1a87660dbfca4e36a30e471093669fb876b111fe0b3ed470d06c60b",
-      "bytes": 73190,
-      "captured_utc": "2026-10-22T03:16:26.376Z"
+      "captured_utc": "2026-10-22T05:14:28.859Z",
+      "sha256": "sha256:acb0e3b216c4d749cce6b0201c629ea6aa2e9b733f67e2c1a886d06278711d44",
+      "bytes": 73268
     },
     {
       "name": "admin-audit-desktop",
@@ -81,9 +81,9 @@
       "route": "/admin/audit",
       "viewport": "1440x900",
       "state": "authenticated",
-      "sha256": "sha256:6588b44b83329b11cbeee6f4fa27b33676d012768ad0d45e4dadfc3b7f7501e1",
-      "bytes": 30663,
-      "captured_utc": "2026-10-22T03:16:26.376Z"
+      "captured_utc": "2026-10-22T05:14:29.530Z",
+      "sha256": "sha256:1e95551de29930651732911c452bf857b386814ac56fed7bd896a475ab711810",
+      "bytes": 30765
     },
     {
       "name": "dashboard-mobile",
@@ -91,9 +91,9 @@
       "route": "/",
       "viewport": "390x844",
       "state": "authenticated",
-      "sha256": "sha256:70ad042fe73e7adf82b54bee7ab8d70ae58733c22f281410ba77e7cc6d66d135",
-      "bytes": 100336,
-      "captured_utc": "2026-10-22T03:16:26.377Z"
+      "captured_utc": "2026-10-22T05:14:30.842Z",
+      "sha256": "sha256:2c206a4e7ff40575d6eca3c65f4b44b24ff490b94f5df0d863eced7d3fcbb571",
+      "bytes": 110655
     },
     {
       "name": "monitor-editor-mobile",
@@ -101,9 +101,9 @@
       "route": "/monitors (editor open)",
       "viewport": "390x844",
       "state": "authenticated",
-      "sha256": "sha256:37b3da585e9cb5a46e5d1725bc4698f9884f7f188cacdf4491abd645e16edfed",
-      "bytes": 60746,
-      "captured_utc": "2026-10-22T03:16:26.377Z"
+      "captured_utc": "2026-10-22T05:14:31.563Z",
+      "sha256": "sha256:5d6b7b421a568425ee409b0975e7e0344caf73661a6ee1fecf818c884283e3ac",
+      "bytes": 56941
     },
     {
       "name": "admin-mobile",
@@ -111,9 +111,9 @@
       "route": "/admin/users",
       "viewport": "390x844",
       "state": "authenticated",
-      "sha256": "sha256:f852849f5761c6256965a88a87a5dcc0a92261ffe0ab71eeff86449c300a13e9",
-      "bytes": 92529,
-      "captured_utc": "2026-10-22T03:16:26.378Z"
+      "captured_utc": "2026-10-22T05:14:32.905Z",
+      "sha256": "sha256:ab0a56f84753d30a09970276f23daaed7249e7917a75b38b11601ba1d267f578",
+      "bytes": 92901
     },
     {
       "name": "monitor-incident-recovery",
@@ -122,9 +122,9 @@
       "viewport": "1280x720@11fps",
       "state": "recorded-flow",
       "transcript": "docs/media/monitor-incident-recovery.transcript.md",
-      "sha256": "sha256:5ca90c85a23298d333ab21f52202c521c94a11e3aeb5debb5481ee117959f899",
-      "bytes": 2992127,
-      "captured_utc": "2026-10-22T03:16:26.388Z"
+      "captured_utc": "2026-10-22T05:14:42.187Z",
+      "sha256": "sha256:36a309da14c4e65348cab88e9fd3ee0a5da00eae96ca1c64a5d6b30090a3715e",
+      "bytes": 2925067
     },
     {
       "name": "admin-role-and-audit",
@@ -133,9 +133,9 @@
       "viewport": "1280x720@11fps",
       "state": "recorded-flow",
       "transcript": "docs/media/admin-role-and-audit.transcript.md",
-      "sha256": "sha256:2c16c404642e470dc563e5ce78ad22244e38a344c8499c1c5b394feb5ede1585",
-      "bytes": 2094341,
-      "captured_utc": "2026-10-22T03:16:26.394Z"
+      "captured_utc": "2026-10-22T05:14:48.297Z",
+      "sha256": "sha256:14a80373eae46c9369176a865e1722763586a1f231bdd1f8ba87445d66deb031",
+      "bytes": 1912131
     }
   ]
 }
