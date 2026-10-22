@@ -53,7 +53,10 @@ type Reservation struct {
 func ReserveRun(ctx context.Context, conn *pgx.Conn, monitorID uuid.UUID,
 	expectedGen int64, caps AdmissionCaps, epoch int64) (*Reservation, error) {
 
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+	// Quota row locks serialize admissions, but the following count queries
+	// must see reservations committed while waiting. Pin READ COMMITTED so a
+	// server-level REPEATABLE READ default cannot leave them on a stale snapshot.
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return nil, err
 	}

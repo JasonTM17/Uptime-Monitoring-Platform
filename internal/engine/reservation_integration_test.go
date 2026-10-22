@@ -5,10 +5,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 var caps = AdmissionCaps{OwnerPer60s: 100, GlobalPer60s: 100}
@@ -143,6 +145,130 @@ func TestAdmissionWindowFull(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("rollback charged the window: %d runs", n)
+	}
+}
+
+// ReserveRun's quota count is issued after it waits on the singleton
+// quota_budgets row. With READ COMMITTED, the count statement sees any
+// reservation that committed while this transaction waited. The server's
+// default isolation is configurable, so admission must pin that contract
+// instead of silently inheriting REPEATABLE READ's older transaction snapshot.
+func TestConcurrentGlobalAdmissionCapUsesFreshPostLockSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	ownerA, monitorA := seedDue(t)
+	ownerB, monitorB := seedDue(t)
+	if ownerA == ownerB || monitorA == monitorB {
+		t.Fatal("fixtures must use distinct owners and monitors")
+	}
+
+	reserveA := engineConn(t)
+	reserveB := engineConn(t)
+	blocker := engineConn(t)
+	observer := engineConn(t)
+	for _, conn := range []*pgx.Conn{reserveA, reserveB} {
+		if _, err := conn.Exec(ctx, `SET default_transaction_isolation = 'repeatable read'`); err != nil {
+			t.Fatalf("set session isolation: %v", err)
+		}
+	}
+
+	var baseline int
+	if err := observer.QueryRow(ctx, `
+		SELECT count(*) FROM uptime.check_runs
+		WHERE reserved_at > clock_timestamp()-interval '60 seconds'`).Scan(&baseline); err != nil {
+		t.Fatalf("read baseline reservations: %v", err)
+	}
+	caps := AdmissionCaps{OwnerPer60s: 10, GlobalPer60s: baseline + 1}
+
+	// Hold the global admission mutex until both ReserveRun transactions have
+	// taken their first statement snapshot and are waiting on that same row.
+	// This makes the interleaving deterministic under a repeatable-read server
+	// default and proves whether the post-lock count gets a fresh snapshot.
+	blockTx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin blocker: %v", err)
+	}
+	defer blockTx.Rollback(ctx)
+	var budget int
+	if err := blockTx.QueryRow(ctx, `
+		SELECT global_monitor_limit FROM uptime.quota_budgets WHERE id=1 FOR UPDATE`).Scan(&budget); err != nil {
+		t.Fatalf("lock global budget: %v", err)
+	}
+
+	type result struct {
+		monitorID uuid.UUID
+		err       error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, item := range []struct {
+		conn      *pgx.Conn
+		monitorID uuid.UUID
+	}{{reserveA, monitorA}, {reserveB, monitorB}} {
+		item := item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, reserveErr := ReserveRun(ctx, item.conn, item.monitorID, 1, caps, 1)
+			results <- result{monitorID: item.monitorID, err: reserveErr}
+		}()
+	}
+	close(start)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := observer.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type='Lock' AND query LIKE '%global_monitor_limit%'`).Scan(&waiting); err != nil {
+			_ = blockTx.Rollback(ctx)
+			wg.Wait()
+			t.Fatalf("observe quota waiters: %v", err)
+		}
+		if waiting >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = blockTx.Rollback(ctx)
+			wg.Wait()
+			t.Fatalf("only %d reservation transactions reached the held quota lock", waiting)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := blockTx.Rollback(ctx); err != nil {
+		t.Fatalf("release quota lock: %v", err)
+	}
+	wg.Wait()
+	close(results)
+
+	succeeded := 0
+	denied := 0
+	for got := range results {
+		if got.err == nil {
+			succeeded++
+			continue
+		}
+		if errors.Is(got.err, ErrAdmissionFull) {
+			denied++
+			continue
+		}
+		t.Errorf("reserve monitor %s: unexpected error: %v", got.monitorID, got.err)
+	}
+	if succeeded != 1 || denied != 1 {
+		t.Fatalf("concurrent global cap outcomes: succeeded=%d denied=%d; want 1 each", succeeded, denied)
+	}
+
+	var committed int
+	if err := observer.QueryRow(ctx, `
+		SELECT count(*) FROM uptime.check_runs
+		WHERE reserved_at > clock_timestamp()-interval '60 seconds'`).Scan(&committed); err != nil {
+		t.Fatalf("read committed reservations: %v", err)
+	}
+	if committed != caps.GlobalPer60s {
+		t.Fatalf("rolling-window charges=%d, cap=%d (baseline=%d)", committed, caps.GlobalPer60s, baseline)
 	}
 }
 
