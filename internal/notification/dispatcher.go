@@ -67,6 +67,9 @@ func (l *Limiter) Allow(chat uuid.UUID) bool {
 	l.globalAt = now
 	ct := refill(l.chatTok[chat], l.chatAt[chat], now, l.perChat)
 	l.chatAt[chat] = now
+	// Persist the refill on every outcome — a refusal must not discard
+	// accumulated budget or a polled chat never reaches a full token.
+	l.chatTok[chat] = ct
 	if l.global >= 0 && l.globalTok < 1 {
 		return false
 	}
@@ -332,11 +335,16 @@ func (d *Dispatcher) process(ctx context.Context, cl Claim) error {
 		return nil
 	}
 
-	// 2) Rate limit — refusal reschedules, it is never a failure.
+	// 2) Rate limit — refusal reschedules, it is never a failure. The
+	// claim already charged `attempts` (the crash-loop bound), so a
+	// refusal must not evaluate the SEND-attempt ceiling or a burst of
+	// refusals alone would dead-letter an unsent row. The 8x bound
+	// stays: a permanently refusing limiter still terminates the row
+	// eventually rather than looping silently forever.
 	if d.limit != nil && !d.limit.Allow(cl.ChannelID) {
 		if _, rerr := d.reschedFn(ctx, cl.ID, cl.LeaseToken,
 			d.clock.Now().Add(d.cfg.Retry.MinDelay),
-			"RATE_LIMITED", d.cfg.Retry.MaxAttempts); rerr != nil {
+			"RATE_LIMITED", d.cfg.Retry.MaxAttempts*8); rerr != nil {
 			return fmt.Errorf("reschedule: %w", rerr)
 		}
 		return nil

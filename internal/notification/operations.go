@@ -54,7 +54,7 @@ func (o *Operations) RetryDeadHead(ctx context.Context, id uuid.UUID,
 	expectedVersion int64) error {
 	ctx, cancel := o.ctx(ctx)
 	defer cancel()
-	tx, err := o.pool.Begin(ctx)
+	tx, err := o.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 	ownerID, monitorID, channelID uuid.UUID, rate TestRate) (uuid.UUID, error) {
 	ctx, cancel := o.ctx(ctx)
 	defer cancel()
-	tx, err := o.pool.Begin(ctx)
+	tx, err := o.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -227,6 +227,16 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 	}
 
 	// 3) rate: per-channel cooldown + global outstanding TEST cap.
+	// The global count must serialize — otherwise two concurrent
+	// requests both read outstanding=cap-1 and both insert. The
+	// quota_budgets singleton is the established serialization row
+	// for lock-then-count admissions (same pattern as create paths).
+	var budget int
+	if err := tx.QueryRow(ctx, `
+		SELECT global_monitor_limit FROM uptime.quota_budgets
+		WHERE id=1 FOR UPDATE`).Scan(&budget); err != nil {
+		return uuid.Nil, err
+	}
 	var recent int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM uptime.notification_outbox

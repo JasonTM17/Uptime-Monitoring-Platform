@@ -317,3 +317,31 @@ func TestDispatcherRateLimit(t *testing.T) {
 		t.Fatalf("acked %+v", fs.acked)
 	}
 }
+
+// A refusal must still bank the accumulated refill — polling the
+// limiter faster than the refill rate must converge on a full token,
+// not discard the increment each call.
+func TestLimiterRefusalKeepsRefill(t *testing.T) {
+	clk := &fakeClock{now: time.Now()}
+	l := NewLimiter(-1, 1, clk) // global disabled, 1 token/sec per chat
+	chat := uuid.New()
+
+	if !l.Allow(chat) {
+		t.Fatal("first send should be allowed")
+	}
+	// Second immediate send refused; then 3 polls at +400ms must
+	// bank 0.4+0.4+0.4 => cap at 1 -> third poll allows.
+	if l.Allow(chat) {
+		t.Fatal("immediate resend should be refused")
+	}
+	for i := 0; i < 2; i++ {
+		clk.Advance(400 * time.Millisecond)
+		if l.Allow(chat) {
+			t.Fatalf("poll %d allowed too early — refill not banking", i)
+		}
+	}
+	clk.Advance(400 * time.Millisecond)
+	if !l.Allow(chat) {
+		t.Fatal("refill must accumulate across refusals")
+	}
+}
