@@ -1,0 +1,108 @@
+# C85 — trusted dual-registry publication (docs/releases/container-policy.md).
+#
+# Trust boundary: release tags v* and manual dispatch only. There is NO
+# pull_request trigger — fork/PR code can never reach secrets or the
+# push path. One build produces one verified OCI artifact; both registry
+# jobs copy THAT archive (index+attestation preserved) — no rebuilds.
+# Exactly one registry success = PARTIAL: no :latest, no docs claim.
+name: container-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "release version v<semver> (manual dispatch on reviewed main)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-release
+  cancel-in-progress: false # never interrupt mid-publish
+
+jobs:
+  build-verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: v
+        run: |
+          v="${{ inputs.version || github.ref_name }}"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "bad version $v"; exit 1; }
+          # A tag run must publish the tag's own version, never an input.
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "$v" != "${{ github.ref_name }}" ]; then
+            echo "input version $v != tag ${{ github.ref_name }}"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: build + attest + scan (C84 wrapper, context gate inside)
+        run: node scripts/build-release-image.mjs --version "${{ steps.v.outputs.version }}" --output artifacts/release/image-manifest.json
+      - name: verify OCI digest chain
+        run: node scripts/verify-container-release.mjs --manifest artifacts/release/image-manifest.json --output artifacts/release/local-verification.json --stage local
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-artifact
+          path: artifacts/release/
+          if-no-files-found: error
+
+  publish-ghcr:
+    needs: build-verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # GHCR push — the only job needing it
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: release-artifact, path: artifacts/release }
+      - name: publish to GHCR (same archive, digest readback)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-release-image.mjs --manifest artifacts/release/image-manifest.json --dest ghcr --output artifacts/release/receipt-ghcr.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with: { name: receipt-ghcr, path: artifacts/release/receipt-ghcr.json }
+
+  publish-dockerhub:
+    needs: build-verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: release-artifact, path: artifacts/release }
+      - name: publish to Docker Hub (same archive, digest readback)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          # Missing prereqs fail BEFORE any mutation: the publisher
+          # refuses absent creds/namespace without attempting a push.
+          test -n "$DOCKERHUB_NAMESPACE" || { echo "vars.DOCKERHUB_NAMESPACE unset — prereq pending"; exit 3; }
+          node scripts/publish-release-image.mjs --manifest artifacts/release/image-manifest.json --dest dockerhub --override-ref "$DOCKERHUB_NAMESPACE" --output artifacts/release/receipt-dockerhub.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with: { name: receipt-dockerhub, path: artifacts/release/receipt-dockerhub.json }
+
+  release-summary:
+    needs: [publish-ghcr, publish-dockerhub]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { pattern: "receipt-*", path: artifacts/release, merge-multiple: true }
+      - name: merge receipts — PARTIAL unless both verified
+        run: |
+          node -e "const fs=require('fs');const rs=['receipt-ghcr.json','receipt-dockerhub.json'].filter(f=>fs.existsSync('artifacts/release/'+f)).map(f=>JSON.parse(fs.readFileSync('artifacts/release/'+f)));const all=rs.flatMap(r=>r.receipts||[]);const ok=all.filter(r=>r.verified).length;const verdict=all.length===2&&ok===2?'PASS':ok>0?'PARTIAL':'FAIL';fs.writeFileSync('artifacts/release/publication-summary.json',JSON.stringify({verdict,receipts:all,utc:new Date().toISOString()},null,2));console.log('publication',verdict);process.exit(verdict==='PASS'?0:verdict==='PARTIAL'?2:1)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with: { name: publication-summary, path: artifacts/release/publication-summary.json }
