@@ -1,6 +1,6 @@
 # Local operations: health and metrics
 
-Runtime signals added in Phase 09 (C77). Everything here is bounded:
+Runtime signals added in Phase 09. Everything here is bounded:
 metric labels come from fixed tables, gauges are atomic reads or
 TTL-cached, and a scrape can never fan out into unbounded DB work.
 
@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:8080/health/ready
 curl -s -H "Authorization: Bearer $METRICS_TOKEN" http://127.0.0.1:8080/metrics
 ```
 
-## Release image (C78)
+## Release image (the release-image lane)
 
 `uptime-platform:local` — two-stage build: pinned `golang:1.27.3`
 compiles a static `linux/amd64` binary; the runtime is
@@ -112,7 +112,7 @@ docker build --pull \
 
 `.dockerignore` is deny-by-default: only `go.mod`, `go.sum`, `cmd/`,
 `internal/` reach the daemon. The gate resolves the same ignore
-rules, rejects when any blocked namespace (`plans/`, `.env*`,
+rules, rejects when any blocked namespace (internal plan path, `.env*`,
 `.secrets/`, kit state, `node_modules`, `artifacts/`, keys/certs)
 survives filtering, plants inert sentinels to prove exclusion, and
 writes a hashed manifest (`artifacts/build/context-manifest.json`,
@@ -129,7 +129,7 @@ gitignored) for the build receipt.
 - `linux/amd64` only. ARM requires separate evidence; do not widen
   the platform matrix silently.
 
-### Verified smoke (C78 evidence)
+### Verified smoke (the release-image lane evidence)
 
 | Check | Evidence |
 | --- | --- |

@@ -9,10 +9,10 @@ only in the provider store — never committed.
 | Role | String | Mode | Why |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | app pool | session or transaction pooler OK for app reads/writes | pooled HTTP workload |
-| `ENGINE_DATABASE_URL` | engine owner lock | **direct session (port 5432), NOT transaction pooler** | the advisory owner-lock + dedicated `*pgx.Conn` requires session semantics; transaction mode releases the backend between statements and silently breaks lock ownership (C80 fencing) |
+| `ENGINE_DATABASE_URL` | engine owner lock | **direct session (port 5432), NOT transaction pooler** | the advisory owner-lock + dedicated `*pgx.Conn` requires session semantics; transaction mode releases the backend between statements and silently breaks lock ownership (engine fencing) |
 | `MIGRATION_DATABASE_URL` | `golang-migrate` run | direct session, **TLS required** (`sslmode=require`) | migrations at deploy time only; never auto-migrated at app start |
 
-All strings: `postgres://postgres.[project-ref]:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require`
+All strings: `postgres://postgres.[project-ref]@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require`
 for direct session, or port `6543` for transaction pooler (app DSN
 only, never the engine DSN).
 

@@ -97,7 +97,7 @@ paths:
                         properties:
                           csrf_token: { type: string }
               example:
-                data: { csrf_token: "9f3d2c1b-example-token" }
+                data: { csrf_token: "<csrf-token>" }
 
   /auth/register:
     post:
@@ -977,7 +977,7 @@ paths:
   /summary:
     get:
       tags: [planned]
-      summary: (C50) Owner usage summary — typed quota schema
+      summary: Owner usage summary — typed quota schema
       x-future: true
       operationId: plannedSummary
       responses:

@@ -1,4 +1,4 @@
-# Capacity & recovery measurement (C80)
+# Capacity & recovery measurement (the capacity run)
 
 Measures the engine's bounded behavior under the frozen local protocol.
 Everything in a report's `measured` section comes from the composed

@@ -300,9 +300,9 @@ async function main() {
     browser: `chromium ${browser?.version?.() ?? "playwright"}`,
     harness: "compose.test.yaml (uptime-media): testapp + fixture + postgres:17.11 + vite dev",
     seed: { tag: seedTag, identities: "synthetic @demo.invalid accounts; no personal data" },
-    privacy: "allowlisted app routes only; no plans/reports/personal paths in pixels/DOM/metadata",
+    privacy: "allowlisted app routes only; no internal plan/report/personal paths in pixels/DOM/metadata",
     limitations: [
-      "localRC capture — hosted/production media pending C90 deploy",
+      "localRC capture — hosted/production media pending hosted deploy",
       "GIF flows use deterministic fixture toggles, not real target latency",
     ],
     artifacts: shots.map((s) => ({

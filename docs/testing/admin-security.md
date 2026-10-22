@@ -81,7 +81,7 @@ the write is honestly first, never torn.
   any write path that bypasses the epoch bump still cannot land
   *between* the guarded read and the commit.
 
-### Residual seams (Wukong verdict, named not hidden)
+### Residual seams (independent adversarial review verdict, named not hidden)
 
 - `AuthorizeRead` locks the actor row FOR UPDATE — a long read can
   delay that actor's revocation (liveness, not correctness).

@@ -29,12 +29,12 @@ How the React app (`web/`) is proven, and where the proof boundary sits.
 ## State coverage
 
 `docs/design/state-matrix.md` lists the designed states per screen;
-its "Verification coverage (C76)" section maps each state to the spec
+its "Verification coverage (the frontend verification)" section maps each state to the spec
 that proves it and marks mocked/unit/manual/not-run per row.
 
 ## Accessibility
 
-- `@axe-core/playwright` (pinned at C67) runs in `e2e/shell.spec.ts`
+- `@axe-core/playwright` (pinned at the design-token work) runs in `e2e/shell.spec.ts`
   and `e2e/responsive-a11y.spec.ts` — zero-violation gate on login,
   dashboard, and admin overview.
 - Keyboard: navigation, dialogs, filters, and audit-detail traversal

@@ -14,7 +14,7 @@ live in the tool.
 
 **What it is NOT:** a marketing dashboard, a blended design, or
 copied generated HTML. The Stitch artifacts are concept media —
-tokens map to real components in C67+; generated markup is not
+tokens map to real components; generated markup is not
 the app.
 
 ## Decisions and trade-offs

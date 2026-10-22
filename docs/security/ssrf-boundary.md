@@ -7,7 +7,7 @@ read the results through status/latency side channels.
 
 ## Where the boundary lives
 
-1. **Syntax gate (C19, monitor create/patch).** Schemes limited to
+1. **Syntax gate (the syntax gate, monitor create/patch).** Schemes limited to
    `http`/`https`; userinfo, fragments, and whitespace rejected;
    explicit ports limited to `80`/`443` and honored literally
    (`http://x:443` means plain HTTP over 443). Obvious non-public
@@ -15,11 +15,11 @@ read the results through status/latency side channels.
    boundary — strings can't prove routability. The checker's
    `ParseTarget` mirrors this contract exactly; a divergence would
    silently self-exclude a monitor the API accepted.
-2. **Resolution gate (C28).** Every DNS answer is classified with
+2. **Resolution gate (the resolution gate).** Every DNS answer is classified with
    `netip` AFTER unmapping IPv4-mapped IPv6. ANY denied answer fails
    the whole resolution — a hostname is dialable only when every
    returned address is public global unicast.
-3. **Dial gate (C29).** The transport dials the validated IP:port
+3. **Dial gate (the dial gate).** The transport dials the validated IP:port
    directly; TLS `ServerName` and certificate verification still use
    the ORIGINAL hostname. No proxy, no redirects, no keep-alive
    coalescing — the connection cannot escape the approved set.
@@ -61,9 +61,9 @@ read the results through status/latency side channels.
 expected decisions independently of the implementation, sourced from
 the IANA special-purpose registries (dates recorded in the file). The
 integrity harness proves the oracle is well-formed; implementation
-parity is proven in C28.
+parity is proven in the resolution gate.
 
-## Observed verification evidence (C32 snapshot)
+## Observed verification evidence (the boundary verification snapshot)
 
 - `go test ./internal/checker -count=1` — PASS (~8.6s): full fixture
   oracle, pinned-dial recorder, TLS CA composition, bounded body,

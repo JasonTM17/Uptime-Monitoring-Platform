@@ -50,7 +50,7 @@ Cells: what the user sees + what they can do. "—" = not applicable.
 - **200% zoom / 390px** → every table degrades to stacked cards;
   filters collapse into a disclosure region.
 
-## Verification coverage (C76)
+## Verification coverage
 
 How each state class is proven. **Mocked** = Playwright route
 interception over contract fixtures — proves UI state semantics, never

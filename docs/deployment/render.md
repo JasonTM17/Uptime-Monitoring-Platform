@@ -17,7 +17,7 @@ modular monolith keeps engine ownership/session-lock semantics intact.
   keepalive pings `GET /health/live` every 5 min. `/health/live` is
   DB-free so keepalive consumes no DB budget; `/health/ready` stays
   the DB-bound probe. Engine owner-loss/restart correctness is already
-  proven (C80); cold starts are tolerated, not hidden.
+  proven by the local capacity run; cold starts are tolerated, not hidden.
 - **Ephemeral FS** — app is stateless (postgres is the only state).
 
 ## Env contract
@@ -44,6 +44,6 @@ session semantics (see `docs/deployment/supabase.md`).
 ## Rollback
 
 Render free rollbacks cover the 2 most recent deploys. Rollback = set
-`image.url` to the retained previous compatible digest (C87 receipt)
+`image.url` to the retained previous compatible digest (distribution acceptance receipt)
 and redeploy — schema compatibility is the gate, never a `down`
 migration.

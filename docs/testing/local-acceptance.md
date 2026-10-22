@@ -1,4 +1,4 @@
-# Local acceptance harness (C79)
+# Local acceptance harness (the local acceptance harness)
 
 Deterministic, disposable end-to-end proof for the composed platform:
 real PostgreSQL, real API, real engine, real delivery pipeline, and a
@@ -122,7 +122,7 @@ stepping between UI observations.
 **fresh** `accept_restore` database in the same disposable container
 → schema-version + row-count verification across users, sessions,
 monitors, incidents, outbox, audit. This is the mechanism-level
-rehearsal; the full restored-identity verification matrix is C81.
+rehearsal; the full restored-identity verification matrix is the restore drill.
 
 ## Teardown
 

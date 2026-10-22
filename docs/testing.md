@@ -23,7 +23,7 @@ database (port 54330) — never the local data DB:
 ```sh
 docker compose --profile db up -d postgres-test      # if not running
 docker compose --profile migrate run --rm migrate-test up   # apply schema
-TEST_DATABASE_URL="postgres://uptime_test:<pw>@127.0.0.1:54330/uptime_test?sslmode=disable" \
+TEST_DATABASE_URL="postgres://uptime_test@127.0.0.1:54330/uptime_test?sslmode=disable" \
   go test -count=1 -tags=integration ./internal/auth/
 ```
 

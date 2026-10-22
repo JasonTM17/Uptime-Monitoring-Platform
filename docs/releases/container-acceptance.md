@@ -1,4 +1,4 @@
-# Container distribution acceptance — C87 gate
+# Container distribution acceptance gate
 
 Status: **MECHANISM COMPLETE / PUBLICATION BLOCKED** (2026-10-22)
 
@@ -33,8 +33,8 @@ API calls behind each:
 2. `ghcr-package` — `gh api users/JasonTM17/packages` returned 30 real
    packages on the account; `uptime-monitoring-platform` genuinely
    absent (readback path proven, not a silent error).
-3. `dockerhub-package` — namespace unresolved (C83 prerequisite).
-4. `receipts-present` — no publication receipts; the C85 trusted run
+3. `dockerhub-package` — namespace unresolved (the container policy prerequisite).
+4. `receipts-present` — no publication receipts; the the publication workflow trusted run
    has not executed.
 
 ## Prerequisites still required before any publish
@@ -50,8 +50,8 @@ API calls behind each:
 1. `gh workflow run container-release.yml --ref <reviewed tag>` —
    one trusted run publishes the verified artifact to both registries.
 2. `--stage remote` readback flips to PASS when package association,
-   visibility, and digest parity are observed (C86).
+   visibility, and digest parity are observed (the package readback).
 3. `--anonymous` stage flips to PASS when both digest pulls + smoke
    succeed under the empty config, including the rollback-digest step
-   once ≥1 retained prior digest exists (C87 F/E).
+   once ≥1 retained prior digest exists.
 4. `:latest` may only be tagged after a dual-registry PASS.

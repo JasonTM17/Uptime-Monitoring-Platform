@@ -1,7 +1,7 @@
-# Container distribution policy (C83)
+# Container distribution policy
 
 Status: contract frozen at local-acceptance `2503232`; publication gates
-(C85+) consume this document. Nothing below is a claim that publication
+(the publication workflow+) consume this document. Nothing below is a claim that publication
 happened — it defines what must be true before it may.
 
 ## 1. Registry identities
@@ -14,7 +14,7 @@ happened — it defines what must be true before it may.
 GitHub Packages source association uses the OCI
 `org.opencontainers.image.source` label → `JasonTM17/Uptime-Monitoring-Platform`.
 A public source repo does not imply a public GHCR package — package
-visibility is verified separately (C86).
+visibility is verified separately (the package readback).
 
 ## 2. License prerequisite
 
@@ -45,7 +45,7 @@ Required OCI labels (all set at build, never from secrets):
 
 ## 4. Pre-publish gates (order enforced)
 
-1. Local acceptance PASS at the exact source SHA (C82 evidence).
+1. Local acceptance PASS at the exact source SHA (the local acceptance gate evidence).
 2. Effective build-context privacy gate (`check-build-context.mjs`)
    before any builder receives the context — receipt binds source +
    Dockerfile + filter + context hashes.
@@ -58,10 +58,10 @@ Required OCI labels (all set at build, never from secrets):
 5. Image smoke: non-root UID, read-only rootfs, SIGTERM deadline,
    CA-chain outbound, `/health/live` DB-free, `/health/ready` post-migrate.
 6. Only then: authenticated publish, remote inspect, package
-   association/visibility (C86), fresh **anonymous** pull + run in a
-   disposable world (C87).
+   association/visibility (the package readback), fresh **anonymous** pull + run in a
+   disposable world (the distribution acceptance).
 
-## 5. CI trust boundary (C85 contract)
+## 5. CI trust boundary (the publication workflow contract)
 
 - Trigger: protected release tag or manual dispatch on a reviewed ref.
   `pull_request` (especially forks) never receives publish secrets.
@@ -74,7 +74,7 @@ Required OCI labels (all set at build, never from secrets):
 - Partial failure: `PARTIAL` is recorded, retry reuses the same digest —
   the same tag never points at different bytes. Docs/`latest` follow
   full dual success only.
-- No private plans/reviews/raw context manifest in CI artifacts, logs,
+- No internal plan/review/raw context manifest in CI artifacts, logs,
   cache, provenance, or uploaded context. Public-history preparation is
   a separate owner-authorized prerequisite — never an autonomous
   rewrite/push.
@@ -91,7 +91,7 @@ Missing required secret → workflow fails **before** any mutation.
 
 ## 7. Registry manifest schema (evidence artifact)
 
-`artifacts/release/image-manifest.json` — produced by the C84 build
+`artifacts/release/image-manifest.json` — produced by the the release build build
 wrapper, consumed by verifier + publisher:
 
 ```json
