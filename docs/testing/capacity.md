@@ -18,6 +18,20 @@ projections only and is never evidence for scale claims.
 | Check timeout | 10 s | monitor `timeout_seconds` (schema max) |
 | Distributions | fast (`<10 ms` 200s) then timeout-heavy (hangs → 10 s timeouts) | fixture `up`/`timeout` modes |
 
+`ReserveRun` pins PostgreSQL isolation to `READ COMMITTED`: owner and global
+quota locks serialize competing admissions, and the later count statements
+must see reservations committed while they waited. Inheriting a
+`REPEATABLE READ` server default can leave the counts on an older snapshot and
+oversubscribe the rolling window. `TestConcurrentGlobalAdmissionCapUsesFreshPostLockSnapshot`
+holds the budget lock until both reservations are queued to exercise this case.
+
+The same pin covers every actor-locked admission transaction that performs
+`quota_budgets FOR UPDATE` then counts sibling rows: `auth.WithUserLock`
+(monitor create), `monitor.Repository.withActorLock`, and
+`notification.Repository.withActorLock` (channel create). Each begins its
+transaction at `READ COMMITTED` so post-lock counts cannot freeze on a
+pre-lock snapshot under a changed server default.
+
 Total budget defaults to 1800 s: ~35% fast, ~35% timeout-heavy, ~30%
 fault injections. `--duration-seconds` rescales the two steady phases;
 faults have fixed minimum windows.

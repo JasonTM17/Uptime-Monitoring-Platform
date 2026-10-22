@@ -58,7 +58,11 @@ func (r *Repository) withActorLock(ctx context.Context, ownerID uuid.UUID,
 	fn func(tx pgx.Tx) error) error {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
-	tx, err := r.pool.Begin(ctx)
+	// READ COMMITTED is pinned: fn bodies take quota_budgets FOR UPDATE
+	// and then count rows committed while the lock was held — under a
+	// server REPEATABLE READ default the counts would read a stale
+	// pre-lock snapshot and oversubscribe.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return mapErr(err)
 	}

@@ -168,7 +168,11 @@ func (r *Repository) withActorLock(ctx context.Context, ownerID uuid.UUID,
 	fn func(tx pgx.Tx, a actorRow) error) error {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
-	tx, err := r.pool.Begin(ctx)
+	// READ COMMITTED is pinned, not inherited: fn bodies run
+	// quota_budgets FOR UPDATE → count → insert, and the counts must see
+	// rows committed while this tx waited on the budget lock. A server
+	// REPEATABLE READ default would freeze them on the pre-lock snapshot.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return mapErr(err)
 	}
