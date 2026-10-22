@@ -72,7 +72,7 @@ type Handler = (url: string, init?: RequestInit) => Promise<Response> | null;
 let handler: Handler;
 let posted: { url: string; method: string; body?: unknown; idem?: string | null }[] = [];
 
-const defaults = (url: string, _init?: RequestInit) => {
+const defaults = (url: string) => {
   if (url === "/api/auth/me")
     return res({ data: { user: USER, session_expires_at: "t" } });
   if (url === "/api/auth/csrf") return res({ data: { csrf_token: "tok" } });

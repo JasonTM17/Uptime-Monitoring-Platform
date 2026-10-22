@@ -127,7 +127,7 @@ type drillWorld struct {
 	boxDown, boxRec, boxTest uuid.UUID
 	token                    string
 	v1cipher                 []byte
-	v1material                    string
+	v1material               string
 }
 
 func seedWorld(t *testing.T, conn *pgx.Conn) drillWorld {

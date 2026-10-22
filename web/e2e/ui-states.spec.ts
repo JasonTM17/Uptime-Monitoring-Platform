@@ -39,6 +39,8 @@ test.describe("ui state honesty", () => {
     await expect(page.getByText(/you’re offline/i)).toBeVisible();
     await context.setOffline(false);
     await expect(page.getByText(/you’re offline/i)).toHaveCount(0);
+    // initial fetch + the reconnect refetch must both have landed
+    expect(summaryHits).toBeGreaterThanOrEqual(2);
   });
 
   test("denied and empty read differently across sections", async ({ page }) => {

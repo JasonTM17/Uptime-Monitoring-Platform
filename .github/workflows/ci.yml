@@ -71,7 +71,7 @@ jobs:
           ./internal/monitor/ ./internal/notification/ ./internal/admin/
         env:
           PGPASS: postgres
-          TEST_DATABASE_URL: postgres://uptime_test:${PGPASS}@localhost:5433/uptime_test?sslmode=disable
+          TEST_DATABASE_URL: postgres://uptime_test:${{ env.PGPASS }}@localhost:5433/uptime_test?sslmode=disable
 
   web-quality:
     runs-on: ubuntu-latest
