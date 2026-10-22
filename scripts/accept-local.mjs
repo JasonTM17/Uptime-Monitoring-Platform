@@ -441,11 +441,18 @@ async function gateBrowser(seedFile) {
     [resolve(ROOT, "web", "node_modules", "playwright", "cli.js"),
      "test", "--workers=1",
      "--grep", "LifecycleIncidentRecovery|AdminRoleRevocation|OwnerIsolation|LogoutIdentityRace"],
-    { cwd: resolve(ROOT, "web"), env, stdio: "inherit" });
+    { cwd: resolve(ROOT, "web"), env, stdio: ["ignore", "pipe", "inherit"] });
+  let out = "";
+  proc.stdout.on("data", (d) => { const s = d.toString(); out += s; process.stdout.write(s); });
   const code = await new Promise((r) => proc.on("close", r));
+  // Exit code alone is count-blind: a renamed/deleted spec would grep
+  // to a subset and still exit 0. Pin the expected matrix size — the
+  // four journeys run under both configured projects (2 viewports).
+  const passed = /(\d+) passed/.exec(out)?.[1] ?? "0";
+  const countOK = Number(passed) === 8;
   return {
-    status: code === 0 ? "PASS" : "FAIL",
-    detail: `playwright exit ${code}`,
+    status: code === 0 && countOK ? "PASS" : "FAIL",
+    detail: `playwright exit ${code}, passed=${passed}/8`,
   };
 }
 
@@ -512,7 +519,14 @@ async function main() {
     profile, gate,
     composition: "compose.test.yaml / project uptime-accept",
     gates: {},
-    limitations: [],
+    limitations: [
+      "recordingSender always succeeds — provider failure/retry/DEAD-exhaustion paths are covered only by unit+integration lanes, not this composed evidence",
+      "journeys exercise cmd/testapp (harness image), not the release cmd/api binary — release image has compose-profile smoke coverage only",
+      "app container is dual-homed: egress to real public addresses and the squatted gateway is possible; only the *.fixture path is network-confined — monitor targets must stay fixture-scoped",
+      "/health/ready probes cover started components only; a configured-but-failed dispatcher/janitor would not flip readiness",
+      "/__test__/deliveries and fixture /control are unauthenticated on loopback — a local process could read delivery text or flip fixture mode mid-run",
+      "engine heartbeats run faster under TESTAPP_TICK_MS-adjacent test cadence — owner-loss detection latencies are optimistic vs release 5s heartbeat",
+    ],
   };
 
   console.log(`[accept] profile=${profile} gate=${gate}`);

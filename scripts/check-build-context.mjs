@@ -119,6 +119,10 @@ const BLOCKED_PREFIXES = [
   '.secrets', '.git', '.codex', '.claude', '.agents', '.devin',
   '.cursor', '.gemini', '.grok', '.omp', '.opencode', '.dsh',
   'node_modules', 'artifacts', 'coverage', 'tmp',
+  // Harness binaries must never enter the release build context —
+  // .dockerignore also excludes them, but this gate refuses the
+  // context independently if that exclusion ever regresses.
+  'cmd/testapp', 'cmd/fixture',
 ];
 const BLOCKED_FILES = new Set(['.env', 'docker-compose.override.yml']);
 const blockedRe = new RegExp(

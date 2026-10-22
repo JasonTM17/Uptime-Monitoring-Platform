@@ -10,13 +10,23 @@ name: uptime-accept
 #     ranges) is correctly denied as special-purpose. The fixture
 #     lives here under the network-scoped alias `target-public`, so
 #     the testapp's resolver returns ONLY public global-unicast
-#     addresses for `*.fixture` targets. Nothing can route out —
-#     `internal: true` removes all external connectivity.
+#     addresses for `*.fixture` targets. `internal: true` removes
+#     external connectivity FROM publicnet — the fixture subnet is
+#     not escapable and owns that address space honestly.
 #
 #   control — ordinary NAT bridge. Host-facing published ports and
 #     the database live here. Internal networks cannot serve
 #     published ports, so port binds route through this network
 #     unambiguously.
+#
+#   Isolation boundary: `app` is dual-homed (control + publicnet),
+#   so a check toward a REAL public IP/hostname could egress via
+#   control's NAT, and `93.184.216.1` (the squatted gateway) lands
+#   on the host bridge. The destination policy still denies every
+#   private/control address, so only public-unicast targets could
+#   ever leave the host — acceptance seeds must therefore keep all
+#   monitor targets fixture-scoped (`*.fixture`); the harness does
+#   not confine arbitrary egress, only the fixture path.
 #
 # Nothing shares volumes, credentials, or identities with the local
 # dev stack; the database is tmpfs and `down -v` removes everything

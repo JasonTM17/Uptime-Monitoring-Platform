@@ -353,8 +353,14 @@ try {
   await sleep(20000); // recovery window
   const ownerLossAfter = samples.at(-1)?.uptime_engine_owner_loss_total ?? 0;
   const dbErrors = samples.filter((s) => s.phase === "fault_db_disconnect" && (s.metrics_err || s.stats_err)).length;
+  // Telemetry, not a gate: `docker pause` freezes but does NOT kill
+  // the pg backend — the TCP conn survives and resumes, so
+  // owner_loss +0 is the expected honest outcome. A real kill is
+  // covered by crash_after_reserve. sample_errors records transient
+  // scrape failures during the freeze window.
   faults.db_disconnect = { paused_s: 12, owner_loss_delta: ownerLossAfter - ownerLossBefore,
-    sample_errors: dbErrors, ok: true };
+    sample_errors: dbErrors, gate: false,
+    note: "telemetry — freeze survives conn; kill-path covered by crash_after_reserve" };
   step("fault db_disconnect", true, `12s pause, owner_loss +${ownerLossAfter - ownerLossBefore}, recovered`);
 
   // ---------- fault: crash after reserve (SIGKILL mid-load) ----------
@@ -376,7 +382,7 @@ try {
   faults.crash_after_reserve = {
     epoch: [epochBefore, epochAfter], orphans_interrupted: orphans,
     fabricated_after_death: fab, starts_first_120s: startsAfter,
-    ok: epochAfter > epochBefore && orphans >= 0 && fab === 0 && startsAfter <= 200,
+    ok: epochAfter > epochBefore && fab === 0 && startsAfter <= 200,
   };
   step("fault crash_after_reserve", faults.crash_after_reserve.ok,
     `epoch ${epochBefore}->${epochAfter}, orphans ${orphans}, fabricated ${fab}, starts ${startsAfter} (cap-window bound 200)`);
@@ -425,7 +431,7 @@ try {
   inv.no_multi_open_run = { ok: multiOpen === 0, violations: multiOpen };
   inv.open_incidents = { count: incidents, monitors_multi_open: multiInc, ok: multiInc === 0 };
   inv.stale_finalize_total = { value: samples.at(-1)?.["uptime_engine_finalize_total{result=stale}"] ?? 0,
-    ok: true };
+    gate: false, note: "telemetry — recorded, not asserted" };
   inv.no_catchup_storm = faults.crash_after_reserve;
 
   // ---------- model (arithmetic only, clearly marked) ----------
