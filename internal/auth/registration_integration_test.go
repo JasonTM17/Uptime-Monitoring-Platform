@@ -45,7 +45,7 @@ func TestConcurrentRegistration(t *testing.T) {
 				strings.ToUpper(email), " " + email + " ",
 				strings.ToUpper(email[:1]) + email[1:], email}[i]
 			var err error
-			for try := 0; try < 8; try++ {
+			for try := 0; try < 40; try++ {
 				_, err = svc.Register(ctx, auth.RegisterInput{
 					Email: raw, Password: validPW})
 				// The bounded hash gate is backpressure, not a verdict:

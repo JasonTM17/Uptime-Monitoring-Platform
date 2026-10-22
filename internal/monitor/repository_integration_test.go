@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-var fieldSeq int
+var fieldSeq atomic.Int64
 
 func mkOwner(t *testing.T, pool *pgxpool.Pool, limit int) uuid.UUID {
 	t.Helper()
@@ -76,9 +77,9 @@ func dropBudget(t *testing.T, pool *pgxpool.Pool) {
 }
 
 func wf() monitor.WriteFields {
-	fieldSeq++
+	n := fieldSeq.Add(1)
 	return monitor.WriteFields{
-		Name:            fmt.Sprintf("m-%d", fieldSeq),
+		Name:            fmt.Sprintf("m-%d", n),
 		TargetURL:       "https://example.com/health",
 		IntervalSeconds: 60, TimeoutSeconds: 5,
 	}
