@@ -66,7 +66,7 @@ export function MonitorDetailPage() {
     ]);
 
   const onApiError = (e: unknown) => {
-    if (e instanceof ApiError && e.status === 409 && e.code === "GENERATION_CONFLICT") {
+    if (e instanceof ApiError && e.status === 409 && e.code === "CONFLICT") {
       setConflict(true);
     } else if (e instanceof ApiError) {
       setActionError(e.message);

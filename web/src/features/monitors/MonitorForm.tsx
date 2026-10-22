@@ -104,7 +104,7 @@ export function MonitorForm({
           );
           const first = Object.keys(err.fields)[0] as keyof typeof refs;
           refs[first]?.current?.focus();
-        } else if (err.status === 409 && err.code !== "GENERATION_CONFLICT") {
+        } else if (err.status === 409 && err.code !== "CONFLICT") {
           // Quota/allocation conflicts: surface the safe scope label.
           const scope = err.fields?.scope;
           setTopError(
@@ -113,7 +113,7 @@ export function MonitorForm({
         } else if (err.status === 429) {
           setTopError("Rate limited — wait a moment and try again.");
         } else if (err.status !== 409) {
-          // 409 GENERATION_CONFLICT is handled by the caller's banner.
+          // 409 CONFLICT (stale generation) is handled by the caller's banner.
           setTopError(err.message);
         }
       } else {

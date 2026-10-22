@@ -182,7 +182,7 @@ describe("monitor forms", () => {
         return res(
           {
             error: {
-              code: "GENERATION_CONFLICT",
+              code: "CONFLICT",
               message: "monitor changed since read",
             },
           },
