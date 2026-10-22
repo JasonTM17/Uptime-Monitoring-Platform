@@ -34,7 +34,7 @@ func BootstrapSuperAdmin(ctx context.Context, conn Beginner, email, reason, requ
 	if len(reason) == 0 || len(reason) > maxAuditReason {
 		return ErrReasonRequired
 	}
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func RecoverAdministrativeAccess(ctx context.Context, conn Beginner, email, reas
 	if len(reason) == 0 || len(reason) > maxAuditReason {
 		return ErrReasonRequired
 	}
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}

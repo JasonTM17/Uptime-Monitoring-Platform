@@ -137,7 +137,7 @@ func LoadEffectivePermissions(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 // satisfy — services stay conn-agnostic so tests can inject a single
 // dedicated conn while production wiring uses the shared pool.
 type Beginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
 // WithPrivilegedTx is the privileged-mutation guard: one transaction
@@ -177,7 +177,7 @@ func withPrivilegedTxUsers(ctx context.Context, conn Beginner,
 	actor ActorRef, targets []uuid.UUID, permission string, now time.Time,
 	fn func(tx pgx.Tx, subjects []LockedUser, perms map[string]bool) error) error {
 
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func withPrivilegedTxUsers(ctx context.Context, conn Beginner,
 func AuthorizeRead(ctx context.Context, conn Beginner,
 	actor ActorRef, permission string, now time.Time,
 	fn func(tx pgx.Tx, perms map[string]bool) error) error {
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}

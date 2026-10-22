@@ -50,7 +50,7 @@ func PurgeRolledBatch(ctx context.Context, conn *pgx.Conn,
 	if batch <= 0 {
 		return 0, 0, fmt.Errorf("retention batch must be positive")
 	}
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return 0, 0, err
 	}

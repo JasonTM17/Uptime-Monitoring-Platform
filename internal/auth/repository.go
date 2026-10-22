@@ -148,7 +148,7 @@ func (r *Repository) CreateSession(ctx context.Context, userID uuid.UUID, tokenH
 	expiresAt, idleExpiresAt time.Time, deviceLabel string) (Session, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Session{}, mapErr(err)
 	}

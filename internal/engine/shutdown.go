@@ -224,7 +224,7 @@ func (e *Engine) finalize(ctx context.Context, r Result) {
 	// no-op, so this is safe under commit ambiguity.
 	_ = e.writer.Exec(context.Background(),
 		func(ctx context.Context, conn *pgx.Conn) error {
-			tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+			tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 			if err != nil {
 				return err
 			}

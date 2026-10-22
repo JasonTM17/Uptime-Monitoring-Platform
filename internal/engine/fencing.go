@@ -121,7 +121,7 @@ func (w *Writer) ValidateResultIdentity(ctx context.Context,
 	id FinalizeIdentity) (IdentityVerdict, error) {
 	var verdict IdentityVerdict
 	err := w.Exec(ctx, func(ctx context.Context, conn *pgx.Conn) error {
-		tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 		if err != nil {
 			return err
 		}

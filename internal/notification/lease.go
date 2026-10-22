@@ -72,7 +72,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 	if err := cfg.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return nil, err
 	}

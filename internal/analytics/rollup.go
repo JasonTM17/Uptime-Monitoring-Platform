@@ -91,7 +91,7 @@ func RollupBatch(ctx context.Context, pool *pgxpool.Pool,
 	}
 	defer conn.Release()
 
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return rep, err
 	}

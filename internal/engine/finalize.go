@@ -43,7 +43,7 @@ type FinalizeInput struct {
 func (w *Writer) FinalizeObservation(ctx context.Context, in FinalizeInput) (FinalizeOutcome, error) {
 	var outcome FinalizeOutcome
 	err := w.Exec(ctx, func(ctx context.Context, conn *pgx.Conn) error {
-		tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 		if err != nil {
 			return err
 		}

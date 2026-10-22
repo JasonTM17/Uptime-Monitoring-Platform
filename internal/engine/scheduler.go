@@ -175,7 +175,7 @@ func (s *Scheduler) markStale(runID uuid.UUID) {
 	}
 	_ = s.writer.Exec(context.Background(), func(ctx context.Context,
 		conn *pgx.Conn) error {
-		tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 		if err != nil {
 			return err
 		}
