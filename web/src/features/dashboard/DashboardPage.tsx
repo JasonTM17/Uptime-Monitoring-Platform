@@ -152,7 +152,7 @@ export function DashboardPage() {
             onChange={(e) =>
               setFilters((f) => ({ ...f, q: e.target.value || undefined }))
             }
-            className="rounded border border-border bg-inset px-2 py-1 text-sm text-fg"
+            className="min-w-0 rounded border border-border bg-inset px-2 py-1 text-sm text-fg"
           />
         </div>
 

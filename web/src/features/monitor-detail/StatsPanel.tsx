@@ -94,11 +94,11 @@ export function StatsPanel({ monitorId }: { monitorId: string }) {
                 ["Missed", String(s.missed_samples ?? 0)],
               ] as const
             ).map(([k, v]) => (
-              <div key={k} className="rounded border border-border bg-container p-2">
-                <dt className="font-mono text-[10px] uppercase tracking-wide text-fg-muted">
+              <div key={k} className="min-w-0 overflow-hidden rounded border border-border bg-container p-2">
+                <dt className="truncate font-mono text-[10px] uppercase tracking-wide text-fg-muted">
                   {k}
                 </dt>
-                <dd className="mt-0.5 font-mono text-sm text-fg">{v}</dd>
+                <dd className="mt-0.5 truncate font-mono text-sm text-fg">{v}</dd>
               </div>
             ))}
           </dl>

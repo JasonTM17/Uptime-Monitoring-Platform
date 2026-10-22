@@ -14,7 +14,7 @@ export function AvailabilityPanel({ monitorId }: { monitorId: string }) {
 
   return (
     <section aria-label="Incident history" className="max-w-3xl">
-      <div className="mb-2 flex items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
         <h2 className="text-sm font-medium text-fg-secondary">Incidents</h2>
         <select
           aria-label="Incident state"
@@ -22,7 +22,7 @@ export function AvailabilityPanel({ monitorId }: { monitorId: string }) {
           onChange={(e) =>
             setState((e.target.value || null) as "open" | "resolved" | null)
           }
-          className="rounded border border-border bg-container px-2 py-0.5 text-xs"
+          className="min-w-0 rounded border border-border bg-container px-2 py-0.5 text-xs"
         >
           <option value="">All</option>
           <option value="open">Open</option>

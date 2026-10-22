@@ -2,12 +2,12 @@ import type { DashboardSummary } from "./queries";
 
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded border border-border bg-container p-3">
-      <div className="font-mono text-xs uppercase tracking-wide text-fg-muted">
+    <div className="min-w-0 overflow-hidden rounded border border-border bg-container p-3">
+      <div className="truncate font-mono text-xs uppercase tracking-wide text-fg-muted">
         {label}
       </div>
-      <div className="mt-1 font-mono text-xl text-fg">{value}</div>
-      {hint && <div className="mt-0.5 text-xs text-fg-muted">{hint}</div>}
+      <div className="mt-1 truncate font-mono text-xl text-fg">{value}</div>
+      {hint && <div className="mt-0.5 break-words text-xs text-fg-muted">{hint}</div>}
     </div>
   );
 }

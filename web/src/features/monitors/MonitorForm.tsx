@@ -176,7 +176,7 @@ export function MonitorForm({
           required
           aria-invalid={!!errs.target_url}
           aria-describedby={errs.target_url ? "err-url" : "hint-url"}
-          className="rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
+          className="w-full min-w-0 rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
         />
         {errs.target_url ? (
           <span id="err-url" role="alert" className="text-xs text-down-fg">
@@ -190,7 +190,7 @@ export function MonitorForm({
       </label>
 
       <div className="grid grid-cols-3 gap-3">
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-col gap-1 overflow-hidden text-sm">
           Interval (s)
           <input
             ref={refs.interval_seconds}
@@ -204,7 +204,7 @@ export function MonitorForm({
             }
             required
             aria-invalid={!!errs.interval_seconds}
-            className="rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
+            className="w-full min-w-0 rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
           />
           {errs.interval_seconds && (
             <span role="alert" className="text-xs text-down-fg">
@@ -212,7 +212,7 @@ export function MonitorForm({
             </span>
           )}
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-col gap-1 overflow-hidden text-sm">
           Timeout (s)
           <input
             ref={refs.timeout_seconds}
@@ -226,7 +226,7 @@ export function MonitorForm({
             }
             required
             aria-invalid={!!errs.timeout_seconds}
-            className="rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
+            className="w-full min-w-0 rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
           />
           {errs.timeout_seconds && (
             <span role="alert" className="text-xs text-down-fg">
@@ -234,7 +234,7 @@ export function MonitorForm({
             </span>
           )}
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-col gap-1 overflow-hidden text-sm">
           Expected status
           <input
             ref={refs.expected_status}
@@ -252,7 +252,7 @@ export function MonitorForm({
             }
             aria-invalid={!!errs.expected_status}
             aria-describedby="hint-status"
-            className="rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
+            className="w-full min-w-0 rounded border border-border bg-inset px-2 py-1.5 font-mono text-fg"
           />
           {errs.expected_status ? (
             <span role="alert" className="text-xs text-down-fg">
