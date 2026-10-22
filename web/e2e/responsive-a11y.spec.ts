@@ -45,9 +45,20 @@ async function readyDashboard(page: Page) {
             down: 0,
             paused: 0,
             active: 1,
-            open_incidents: 0,
+            open_incidents: 1,
             sample_uptime_24h: 0.99,
-            recent_incidents: [],
+            // a long unbroken monitor name exercises the wrapped row —
+            // without a seeded incident the overflow gate never sees it
+            recent_incidents: [
+              {
+                id: "9f8e7d6c-5b4a-4321-9876-0123456789ab",
+                monitor_id: "m-1",
+                monitor_name: "billing-api-production-endpoint-monitor",
+                opened_at: "2025-01-01T04:30:00Z",
+                resolved_at: null,
+                close_reason: null,
+              },
+            ],
             quota: { used: 1, active: 1, paused: 0, limit: 5, profile: "local", as_of: "t", source: "server" },
             as_of: "2025-01-01T00:05:00Z",
           },

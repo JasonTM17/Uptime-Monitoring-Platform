@@ -140,7 +140,7 @@ export function MonitorDetailPage() {
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-lg font-semibold">{m.name}</h1>
+            <h1 className="min-w-0 break-words text-lg font-semibold">{m.name}</h1>
             <HealthBadge
               health={m.health}
               isPaused={m.is_paused}
@@ -196,7 +196,7 @@ export function MonitorDetailPage() {
               <fieldset className="flex flex-col gap-1">
                 <legend className="sr-only">Channels to bind</legend>
                 {eligible.map((c) => (
-                  <label key={c.id} className="flex items-center gap-2 text-sm">
+                  <label key={c.id} className="flex flex-wrap items-center gap-2 text-sm">
                     <input
                       type="checkbox"
                       checked={selected.includes(c.id)}
@@ -209,7 +209,7 @@ export function MonitorDetailPage() {
                       }
                     />
                     {c.label}
-                    <span className="font-mono text-xs text-fg-muted">
+                    <span className="min-w-0 break-all font-mono text-xs text-fg-muted">
                       {c.destination_mask ?? ""}
                     </span>
                   </label>

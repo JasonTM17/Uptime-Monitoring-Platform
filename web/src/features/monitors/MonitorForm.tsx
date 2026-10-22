@@ -156,7 +156,7 @@ export function MonitorForm({
           required
           aria-invalid={!!errs.name}
           aria-describedby={errs.name ? "err-name" : undefined}
-          className="rounded border border-border bg-inset px-2 py-1.5 text-fg"
+          className="w-full min-w-0 rounded border border-border bg-inset px-2 py-1.5 text-fg"
         />
         {errs.name && (
           <span id="err-name" role="alert" className="text-xs text-down-fg">

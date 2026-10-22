@@ -86,13 +86,13 @@ export function DashboardPage() {
           </h2>
           <ul className="divide-y divide-border-subtle rounded border border-border bg-container">
             {summary.data.recent_incidents.map((i) => (
-              <li key={i.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+              <li key={i.id} className="flex flex-wrap items-center gap-3 px-3 py-1.5 text-sm">
                 <span className="font-mono text-xs text-fg-muted">
                   {i.opened_at ? new Date(i.opened_at).toLocaleString() : "—"}
                 </span>
                 <Link
                   to={`/monitors/${i.monitor_id}`}
-                  className="text-fg underline decoration-border hover:text-accent-hover"
+                  className="min-w-0 break-words text-fg underline decoration-border hover:text-accent-hover"
                 >
                   {i.monitor_name ?? "monitor"}
                 </Link>
