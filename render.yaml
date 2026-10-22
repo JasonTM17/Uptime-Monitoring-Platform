@@ -1,0 +1,37 @@
+# Render Blueprint — single free web service, digest-deployed.
+# UPTIME_IMAGE_DIGEST is substituted at provision time with the
+# verified manifest-list digest (image-manifest.json image.index_digest).
+# Deploying a mutable tag (incl. :latest) is a contract violation.
+services:
+  - type: web
+    name: uptime-api
+    runtime: image
+    image:
+      url: ghcr.io/jasontm17/uptime-monitoring-platform@UPTIME_IMAGE_DIGEST
+    plan: free
+    numInstances: 1
+    healthCheckPath: /health/live
+    autoDeploy: false
+    envVars:
+      # Non-secret contract — values may live here; secrets go to the
+      # Render env-var UI (sync: false) and are never committed.
+      - key: APP_ENV
+        value: hosted
+      - key: HTTP_HOST
+        value: 0.0.0.0
+      - key: HTTP_PORT
+        value: "8080"
+      - key: NOTIFICATIONS_ENABLED
+        value: "false"
+      - key: TRUSTED_ORIGINS
+        value: UPTIME_VERCEL_ORIGIN
+      - key: TRUSTED_PROXIES
+        value: UPTIME_RENDER_PROXY_CIDRS
+      - key: DATABASE_URL
+        sync: false
+      - key: ENGINE_DATABASE_URL
+        sync: false
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: CSRF_SIGNING_KEY
+        sync: false

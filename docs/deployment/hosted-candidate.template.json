@@ -1,0 +1,48 @@
+{
+  "format": "hosted-candidate-v1",
+  "comment": "Template — copy to artifacts/hosted-candidate.json and substitute UPTIME_* placeholders at provision time. artifacts/ is gitignored; never commit a filled candidate containing real URLs? — real public URLs are fine (they are not secrets), secret values are still forbidden.",
+  "source_sha": "UPTIME_SOURCE_SHA_40HEX",
+  "image": {
+    "ref": "ghcr.io/jasontm17/uptime-monitoring-platform@UPTIME_IMAGE_DIGEST_sha256_COLON_64HEX"
+  },
+  "env": {
+    "APP_ENV": "hosted",
+    "TRUSTED_ORIGINS": ["https://UPTIME_VERCEL_APP.vercel.app"],
+    "TRUSTED_PROXIES": ["UPTIME_RENDER_PROXY_CIDR"],
+    "DATABASE_URL": "env:DATABASE_URL",
+    "ENGINE_DATABASE_URL": "env:ENGINE_DATABASE_URL",
+    "MIGRATION_DATABASE_URL": "env:MIGRATION_DATABASE_URL",
+    "CSRF_SIGNING_KEY": "sref:CSRF_SIGNING_KEY",
+    "NOTIFICATIONS_ENABLED": "false"
+  },
+  "engine_conn": {
+    "host": "aws-0-UPTIME_REGION.pooler.supabase.com",
+    "port": 5432,
+    "mode": "session",
+    "note": "direct session — never the transaction pooler for the engine owner lock"
+  },
+  "migration": {
+    "strategy": "deploy-step",
+    "tool": "golang-migrate v4.20.1",
+    "receipt": null
+  },
+  "services": [
+    {
+      "type": "web",
+      "name": "uptime-api",
+      "plan": "free",
+      "health_check": "/health/live",
+      "image_deploy": "digest",
+      "keepalive": { "target": "/health/live", "interval_s": 300, "db_free": true }
+    }
+  ],
+  "endpoints": {
+    "api_base": "https://UPTIME_RENDER_APP.onrender.com",
+    "web_origin": "https://UPTIME_VERCEL_APP.vercel.app"
+  },
+  "providers": {
+    "vercel": { "plan": "hobby", "role": "static SPA + /api rewrite" },
+    "render": { "plan": "free", "role": "single web service (API+engine)" },
+    "supabase": { "plan": "free", "role": "postgres 500MB" }
+  }
+}
