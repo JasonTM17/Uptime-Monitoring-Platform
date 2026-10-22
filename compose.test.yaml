@@ -84,9 +84,12 @@ services:
       APP_ENV: local
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: "8080"
-      DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
-      ENGINE_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
-      MIGRATION_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/accept?sslmode=disable
+      # CAP_DB_NAME repoints the whole app at a different database on
+      # the same instance — the C81 restore drill uses it to serve the
+      # restored copy; the default is the seeded accept DB.
+      DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/${CAP_DB_NAME:-accept}?sslmode=disable
+      ENGINE_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/${CAP_DB_NAME:-accept}?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://accept:accept-dummy-password@db:5432/${CAP_DB_NAME:-accept}?sslmode=disable
       # Faster scheduler cadence for test timescales — admission
       # budgets, interval semantics, and thresholds are unchanged.
       # CAP_TICK_MS=1000 pins the release 1s cadence for capacity
@@ -94,8 +97,10 @@ services:
       TESTAPP_TICK_MS: "${CAP_TICK_MS:-250}"
       # Disposable fixed keyring (base64 of 32 zero bytes) — test
       # composition only, never a real destination key.
-      CHANNEL_READ_KEYRING: "1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-      CHANNEL_WRITE_KEY_VERSION: "1"
+      # CAP_* variants let the restore drill repoint with a rotated
+      # (dual-read) ring and a v2 write version; defaults = C79 world.
+      CHANNEL_READ_KEYRING: "${CAP_READ_KEYRING:-1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+      CHANNEL_WRITE_KEY_VERSION: "${CAP_WRITE_KEY_VERSION:-1}"
       CHANNEL_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       # Fixed CSRF key keeps tokens valid across app restarts in a
       # run; an ephemeral key would also be correct.
