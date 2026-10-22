@@ -241,14 +241,90 @@ async function main() {
     }
   }
 
-  if (args.anonymous === "true")
-    check("anonymous-pull", false, "anonymous pull is a C87 gate — requires published packages");
+  if (args.anonymous === "true") {
+    // C87: fresh empty Docker config — cached auths/images cannot be
+    // the oracle. Pulls are BY DIGEST from publication receipts.
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const cfg = mkdtempSync(join(tmpdir(), "uptime-anon-"));
+    writeFileSync(join(cfg, "config.json"), "{}");
+    result.anonymous = { docker_config: cfg, commands: [] };
+    const cmd = (argv) => { result.anonymous.commands.push(argv.join(" "));
+      return run(argv, { quiet: true }); };
+
+    const recPath = args.receipts ? resolve(args.receipts) : null;
+    let receipts = [];
+    try { receipts = recPath ? JSON.parse(readFileSync(recPath, "utf8")).receipts ?? [] : []; }
+    catch { receipts = []; }
+    check("receipts-present", receipts.some((r) => r.verified),
+      receipts.length ? `${receipts.filter((r) => r.verified).length}/${receipts.length} verified receipts` : "no publication receipts — C85 not run");
+
+    for (const r of receipts.filter((x) => x.verified)) {
+      const ref = `${r.reference}@${m.image.index_digest}`;
+      try {
+        await cmd(["docker", "--config", cfg, "pull", ref]);
+        const ins = JSON.parse(await cmd(["docker", "--config", cfg,
+          "image", "inspect", ref]));
+        check(`anon-pull-${r.registry}`, ins?.[0]?.Id === m.image.index_digest ||
+          ins?.[0]?.RepoDigests?.some((d) => d.endsWith(m.image.index_digest)),
+          `pulled ${r.registry} Id=${ins?.[0]?.Id?.slice(0, 19)}…`);
+        // disposable smoke: ready probe on pulled content
+        const smokeOK = await anonSmoke(cmd, ins[0].Id, cfg).catch(() => false);
+        check(`anon-run-${r.registry}`, smokeOK, smokeOK ? "pulled image ready-200" : "smoke failed");
+      } catch (e) {
+        check(`anon-pull-${r.registry}`, false, e.message.slice(0, 140));
+      }
+    }
+    result.anonymous.docker_config = "<task-temp, scrubbed>";
+    rmSync(cfg, { recursive: true, force: true });
+  }
 
   writeFileSync(output, JSON.stringify(result, null, 2));
   console.log(`verdict ${result.verdict} — ${result.checks.map((c) => `${c.name}:${c.ok ? "ok" : "FAIL"}`).join(", ")}`);
   process.exit(result.verdict === "PASS" ? 0 : 1);
 }
 function die2(msg) { throw new Error(`verify-release: ${msg}`); }
+
+// C87 anonymous smoke: pulled image + disposable pg on a scratch net.
+// All docker calls ride the same fresh --config (a truly credential-free
+// session); `cmd` records every resolved command into the receipt.
+async function anonSmoke(cmd, imageId, cfg) {
+  const tag = Date.now();
+  const net = `anon-net-${tag}`, pg = `anon-pg-${tag}`, app = `anon-app-${tag}`;
+  const dsn = `postgres://smoke:smoke-dummy@${pg}:5432/smoke?sslmode=disable`;
+  const kill = (n) => cmd(["docker", "--config", cfg, "rm", "-f", n]).catch(() => {});
+  try {
+    await cmd(["docker", "--config", cfg, "network", "create", net]);
+    await cmd(["docker", "--config", cfg, "run", "-d", "--rm", "--name", pg, "--network", net,
+      "-e", "POSTGRES_USER=smoke", "-e", "POSTGRES_PASSWORD=smoke-dummy",
+      "-e", "POSTGRES_DB=smoke", "postgres:17.11"]);
+    for (let i = 0; i < 30; i++) {
+      const ok = await run(["docker", "exec", pg, "pg_isready", "-U", "smoke", "-d", "smoke"],
+        { quiet: true }).then(() => true).catch(() => false);
+      if (ok) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await cmd(["docker", "--config", cfg, "run", "--rm", "--network", net,
+      "-v", `${resolve(ROOT, "migrations")}:/migrations:ro`,
+      "migrate/migrate:v4.20.1", "-path", "/migrations", "-database", dsn, "up"]);
+    await cmd(["docker", "--config", cfg, "run", "-d", "--rm", "--name", app, "--network", net,
+      "-p", "127.0.0.1:18098:8080",
+      "-e", "APP_ENV=local", "-e", "HTTP_HOST=0.0.0.0", "-e", "HTTP_PORT=8080",
+      "-e", `DATABASE_URL=${dsn}`, "-e", `ENGINE_DATABASE_URL=${dsn}`,
+      "-e", `MIGRATION_DATABASE_URL=${dsn}`, "-e", "NOTIFICATIONS_ENABLED=false",
+      imageId]);
+    for (let i = 0; i < 40; i++) {
+      const r = await fetch("http://localhost:18098/health/ready").catch(() => null);
+      if (r?.status === 200) return true;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return false;
+  } finally {
+    await kill(app); await kill(pg);
+    await cmd(["docker", "--config", cfg, "network", "rm", net]).catch(() => {});
+  }
+}
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
