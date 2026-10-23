@@ -1,5 +1,10 @@
 # Uptime Monitoring Platform
 
+[![CI](https://github.com/JasonTM17/Uptime-Monitoring-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/JasonTM17/Uptime-Monitoring-Platform/actions/workflows/ci.yml)
+[![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](docs/toolchain.md)
+[![PostgreSQL 17](https://img.shields.io/badge/postgresql-17-336791?logo=postgresql&logoColor=white)](docs/toolchain.md)
+[![React + TypeScript](https://img.shields.io/badge/react-typescript-61DAFB?logo=react&logoColor=white)](web/)
+
 A personal Go backend engineering project built around secure uptime checks, incident alerting, advanced administration, and a polished React dashboard.
 
 **Status: local acceptance complete; external distribution pending.** The full product runs locally against the composed harness with evidence-backed gates. Container publication and hosted deployment are blocked on owner-side prerequisites (license choice, registry accounts/credentials, publication authority).
