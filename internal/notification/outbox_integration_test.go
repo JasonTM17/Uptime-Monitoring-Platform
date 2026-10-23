@@ -36,6 +36,13 @@ func seedBase(t *testing.T, c *pgx.Conn) fixture {
 	t.Helper()
 	ctx := context.Background()
 	f := fixture{}
+	// quota_budgets is seeded empty by migrations and populated by app
+	// startup; admission paths fail closed without it.
+	if _, err := c.Exec(ctx, `
+		INSERT INTO uptime.quota_budgets (id,global_monitor_limit)
+		VALUES (1,100) ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatalf("seed budget: %v", err)
+	}
 	if err := c.QueryRow(ctx, `
 		INSERT INTO uptime.users(id,email,password_hash,status,monitor_limit)
 		VALUES (gen_random_uuid(),$1,'x','ACTIVE',10) RETURNING id`,
