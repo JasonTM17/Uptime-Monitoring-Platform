@@ -1,6 +1,7 @@
 package admin_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/admin"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
@@ -69,55 +71,70 @@ func TestRolesRouteTable(t *testing.T) {
 }
 
 // TestRolesErrorMapping pins the admin error lattice onto HTTP codes.
-func TestRolesErrorMapping(t *testing.T) {
-	cases := []struct {
-		err  error
-		want int
-	}{
-		{admin.ErrActorRevoked, http.StatusUnauthorized},
-		{admin.ErrForbidden, http.StatusForbidden},
-		{admin.ErrReauthRequired, http.StatusForbidden},
-		{admin.ErrLastSuperAdmin, http.StatusConflict},
-		{admin.ErrStaleEpoch, http.StatusConflict},
-		{admin.ErrIdempotencyConflict, http.StatusConflict},
-		{admin.ErrSubjectRevoked, http.StatusNotFound},
-		{admin.ErrValidation, http.StatusUnprocessableEntity},
-		{&admin.ValidationError{Fields: map[string]any{
-			"missing_permissions": []string{"users:read"}}},
-			http.StatusUnprocessableEntity},
-		{errors.New("boom"), http.StatusInternalServerError},
-	}
-	for _, c := range cases {
-		// Drive the mapper through a handler whose service call is
-		// bypassed: invoke writeErr behavior via a probe handler.
-		got := mapErrStatus(c.err)
-		if got != c.want {
-			t.Fatalf("%v: got %d, want %d", c.err, got, c.want)
-		}
-	}
+// errBeginner fails BeginTx with a scripted sentinel — enough to drive
+// the handler's writeErr lattice through the real mux without a DB.
+type errBeginner struct{ err error }
+
+func (e errBeginner) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
+	return nil, e.err
 }
 
-// mapErrStatus mirrors the handler's writeErr table — kept honest by
-// mapping through the same exported error sentinels.
-func mapErrStatus(err error) int {
-	var ve *admin.ValidationError
-	switch {
-	case errors.As(err, &ve), errors.Is(err, admin.ErrValidation):
-		return http.StatusUnprocessableEntity
-	case errors.Is(err, admin.ErrActorRevoked):
-		return http.StatusUnauthorized
-	case errors.Is(err, admin.ErrReauthRequired),
-		errors.Is(err, admin.ErrForbidden):
-		return http.StatusForbidden
-	case errors.Is(err, admin.ErrLastSuperAdmin),
-		errors.Is(err, admin.ErrStaleEpoch),
-		errors.Is(err, admin.ErrIdempotencyConflict):
-		return http.StatusConflict
-	case errors.Is(err, admin.ErrSubjectRevoked):
-		return http.StatusNotFound
-	default:
-		return http.StatusInternalServerError
+// TestRolesErrorMapping exercises the REAL writeErr table: each route
+// reaches SuspendAccount, the scripted BeginTx failure propagates
+// verbatim, and the handler maps it. An out-of-sync mapping fails here
+// instead of passing against a stale in-test mirror.
+func TestRolesErrorMapping(t *testing.T) {
+	target := uuid.New()
+	cases := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"actor revoked", admin.ErrActorRevoked, http.StatusUnauthorized},
+		{"forbidden", admin.ErrForbidden, http.StatusForbidden},
+		{"reauth", admin.ErrReauthRequired, http.StatusForbidden},
+		{"last superadmin", admin.ErrLastSuperAdmin, http.StatusConflict},
+		{"stale epoch", admin.ErrStaleEpoch, http.StatusConflict},
+		{"idempotency conflict", admin.ErrIdempotencyConflict, http.StatusConflict},
+		{"quota conflict", &admin.QuotaConflict{Usage: 3, Requested: 1}, http.StatusConflict},
+		{"delivery not head", admin.ErrDeliveryNotHead, http.StatusConflict},
+		{"delivery state", admin.ErrDeliveryState, http.StatusConflict},
+		{"subject revoked", admin.ErrSubjectRevoked, http.StatusNotFound},
+		{"validation", &admin.ValidationError{Fields: map[string]any{
+			"missing_permissions": []string{"users:read"}}}, http.StatusUnprocessableEntity},
+		{"unmapped", errors.New("boom"), http.StatusInternalServerError},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := admin.NewRolesHandler(errBeginner{c.err},
+				fakeGate{testPrincipal()}, nil, 1<<10,
+				admin.QuotaCeilings{}, nil)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost,
+				"/admin/users/"+target.String()+"/suspend",
+				strings.NewReader(`{"expected_version":1,"reason":"audit"}`))
+			req.Header.Set("Idempotency-Key", "idem-1")
+			h.Mux().ServeHTTP(rec, req)
+			if rec.Code != c.wantCode {
+				t.Fatalf("%s -> %d want %d (%s)",
+					c.err, rec.Code, c.wantCode, rec.Body.String())
+			}
+		})
+	}
+
+	t.Run("missing idempotency key is 422 before any conn touch", func(t *testing.T) {
+		h := admin.NewRolesHandler(errBeginner{nil},
+			fakeGate{testPrincipal()}, nil, 1<<10,
+			admin.QuotaCeilings{}, nil)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost,
+			"/admin/users/"+target.String()+"/suspend",
+			strings.NewReader(`{"expected_version":1,"reason":"audit"}`))
+		h.Mux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("missing idem key -> %d (%s)", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // TestAssignRolesJSONShape pins the request contract fields — a drift

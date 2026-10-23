@@ -284,3 +284,96 @@ func TestAdminFreshness(t *testing.T) {
 		t.Fatalf("missing engine_control reported %q", ov.Engine.Freshness)
 	}
 }
+
+// TestAdminDetailQueries covers the single-subject admin GETs that
+// previously had no coverage at any level: GetUser, GetAuditEvent,
+// ListRoleCatalog — allowed actor, denied actor, and missing subject.
+func TestAdminDetailQueries(t *testing.T) {
+	conn := connect(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	sec, cleanup := actorWithRole(t, conn, "dq-sec", secAdminPreset)
+	defer cleanup()
+	viewer, vcleanup := authFixture(t, conn, "dq-view")
+	defer vcleanup()
+
+	t.Run("GetUser returns subject detail under users:read", func(t *testing.T) {
+		d, err := admin.GetUser(ctx, conn, sec, viewer.UserID, now)
+		if err != nil {
+			t.Fatalf("secadmin GetUser: %v", err)
+		}
+		if d.ID != viewer.UserID || d.Email == "" {
+			t.Fatalf("wrong subject %+v", d)
+		}
+		if len(d.Roles) == 0 || d.Roles[0] != "VIEWER" {
+			t.Fatalf("roles projection %+v", d.Roles)
+		}
+		if _, err := admin.GetUser(ctx, conn, viewer, sec.UserID, now); !errors.Is(err, admin.ErrForbidden) {
+			t.Fatalf("viewer must be denied, got %v", err)
+		}
+		if _, err := admin.GetUser(ctx, conn, sec, uuid.New(), now); !errors.Is(err, admin.ErrSubjectRevoked) {
+			t.Fatalf("missing subject must be 404-ish, got %v", err)
+		}
+	})
+
+	t.Run("GetAuditEvent returns one row under audit:read", func(t *testing.T) {
+		eid := uuid.New()
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO uptime.audit_events
+			  (id,actor_id,actor_kind,action,subject_type,subject_id,
+			   reason,outcome,request_id)
+			VALUES ($1,$2,'USER','users:suspend','user',$3,
+			   'drill evidence','SUCCESS','dq-audit-1')`,
+			eid, sec.UserID, viewer.UserID.String()); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = conn.Exec(c,
+				`DELETE FROM uptime.audit_events WHERE id=$1`, eid)
+		}()
+
+		a, err := admin.GetAuditEvent(ctx, conn, sec, eid, now)
+		if err != nil {
+			t.Fatalf("secadmin GetAuditEvent: %v", err)
+		}
+		if a.ID != eid || a.Action != "users:suspend" || a.Outcome != "SUCCESS" {
+			t.Fatalf("wrong row %+v", a)
+		}
+		if _, err := admin.GetAuditEvent(ctx, conn, viewer, eid, now); !errors.Is(err, admin.ErrForbidden) {
+			t.Fatalf("viewer must be denied, got %v", err)
+		}
+		if _, err := admin.GetAuditEvent(ctx, conn, sec, uuid.New(), now); !errors.Is(err, admin.ErrSubjectRevoked) {
+			t.Fatalf("missing id must be 404-ish, got %v", err)
+		}
+	})
+
+	t.Run("ListRoleCatalog returns presets + ceiling under roles:read", func(t *testing.T) {
+		cat, err := admin.ListRoleCatalog(ctx, conn, sec, now)
+		if err != nil {
+			t.Fatalf("secadmin ListRoleCatalog: %v", err)
+		}
+		if len(cat.Roles) < 5 || len(cat.Catalog) == 0 {
+			t.Fatalf("incomplete catalog %+v", cat)
+		}
+		var sawViewer, sawPerm bool
+		for _, r := range cat.Roles {
+			if r.Code == "VIEWER" {
+				sawViewer = r.IsPreset
+			}
+		}
+		for _, p := range cat.Catalog {
+			if p.ID == "users:read" {
+				sawPerm = true
+			}
+		}
+		if !sawViewer || !sawPerm {
+			t.Fatalf("missing VIEWER preset or users:read perm: %+v", cat)
+		}
+		if _, err := admin.ListRoleCatalog(ctx, conn, viewer, now); !errors.Is(err, admin.ErrForbidden) {
+			t.Fatalf("viewer must be denied, got %v", err)
+		}
+	})
+}
