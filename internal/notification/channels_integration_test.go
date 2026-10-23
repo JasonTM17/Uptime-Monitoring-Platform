@@ -641,3 +641,81 @@ func TestAtomicChannelBindingGeneration(t *testing.T) {
 		t.Fatalf("final generation: %v", d)
 	}
 }
+
+// TestChannelMutationErrorPaths covers the DELETE and disable error
+// lattice that previously only had happy-path coverage: foreign 404,
+// stale version 409, missing version 422, malformed id 404.
+func TestChannelMutationErrorPaths(t *testing.T) {
+	f := newChanFixture(t, notification.Caps{
+		PendingOwner: 10, PendingGlobal: 1000,
+		RetainedOwner: 100, RetainedGlobal: 1000})
+	defer f.cleanup()
+
+	alice := f.newClient()
+	alice.join(f.email("err-a"))
+	bob := f.newClient()
+	bob.join(f.email("err-b"))
+	bChan := bob.channelID("bob-chan")
+
+	t.Run("DELETE validates version and ownership", func(t *testing.T) {
+		mine := alice.channelID("del-me")
+		base := "/notification-channels/" + mine
+
+		rec := alice.do(http.MethodDelete, base, `{}`, true)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("missing expected_version: %d %s", rec.Code, rec.Body.String())
+		}
+		rec = alice.do(http.MethodDelete, base, `{"expected_version":99}`, true)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "CONFLICT" {
+			t.Fatalf("stale version: %d %s", rec.Code, rec.Body.String())
+		}
+		rec = alice.do(http.MethodDelete, "/notification-channels/"+bChan,
+			`{"expected_version":1}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("foreign delete: %d", rec.Code)
+		}
+		rec = alice.do(http.MethodDelete, "/notification-channels/not-a-uuid",
+			`{"expected_version":1}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("malformed id: %d", rec.Code)
+		}
+		if rec := alice.do(http.MethodDelete, base, `{"expected_version":1}`, true); rec.Code != http.StatusNoContent {
+			t.Fatalf("valid delete: %d %s", rec.Code, rec.Body.String())
+		}
+		// Double-delete reads as missing too (tombstone invisible).
+		rec = alice.do(http.MethodDelete, base, `{"expected_version":1}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("deleted delete: %d", rec.Code)
+		}
+	})
+
+	t.Run("disable validates version and ownership", func(t *testing.T) {
+		mine := alice.channelID("dis-me")
+		base := "/notification-channels/" + mine + "/disable"
+
+		rec := alice.do(http.MethodPost, base, `{}`, true)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("missing expected_version: %d %s", rec.Code, rec.Body.String())
+		}
+		rec = alice.do(http.MethodPost, base, `{"expected_version":99}`, true)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("stale version: %d %s", rec.Code, rec.Body.String())
+		}
+		rec = alice.do(http.MethodPost,
+			"/notification-channels/"+bChan+"/disable",
+			`{"expected_version":1}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("foreign disable: %d", rec.Code)
+		}
+		rec = alice.do(http.MethodPost,
+			"/notification-channels/not-a-uuid/disable",
+			`{"expected_version":1}`, true)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("malformed id: %d", rec.Code)
+		}
+		rec = alice.do(http.MethodPost, base, `{"expected_version":1}`, true)
+		if rec.Code != http.StatusOK || dataOf(t, rec)["enabled"] != false {
+			t.Fatalf("valid disable: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+}
