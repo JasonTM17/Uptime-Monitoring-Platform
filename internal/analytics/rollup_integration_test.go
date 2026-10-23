@@ -61,6 +61,12 @@ func cleanAnalytics(t *testing.T, c *pgx.Conn) {
 		`DELETE FROM uptime.quota_budgets`,
 		`DELETE FROM uptime.schedule_segments`,
 		`DELETE FROM uptime.monitors`,
+		// user-children with RESTRICT FKs — leftover rows from
+		// another package (or an interrupted run) must not wedge
+		// this cleanup on audit_events.actor_id et al.
+		`DELETE FROM uptime.audit_events`,
+		`DELETE FROM uptime.admin_idempotency`,
+		`DELETE FROM uptime.user_roles`,
 		`DELETE FROM uptime.users`,
 	} {
 		if _, err := c.Exec(context.Background(), q); err != nil {
