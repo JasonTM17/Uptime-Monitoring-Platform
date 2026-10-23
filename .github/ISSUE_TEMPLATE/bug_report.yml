@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a defect in the backend, frontend, or tooling
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please include enough detail to reproduce —
+        logs, steps, and environment matter more than prose.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the defect and what you expected instead.
+      placeholder: "Resume on a paused monitor returns 500 when ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps or commands that trigger the defect.
+      placeholder: |
+        1. `docker compose up`
+        2. create a monitor ...
+        3. pause it ...
+        4. observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Backend (Go API / engine)
+        - Frontend (React dashboard)
+        - Database / migrations
+        - Notifications (Telegram pipeline)
+        - Tooling / scripts / CI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / evidence
+      description: Paste relevant output. Never include credentials, tokens, or real monitor URLs.
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go/Node versions, how the stack was started.
+      placeholder: "Windows 11, Go 1.27.3, Node 24, `docker compose up`"
