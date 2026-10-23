@@ -3,10 +3,14 @@
 package admin_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -157,3 +161,149 @@ func TestAdminQueryTransport(t *testing.T) {
 		}
 	})
 }
+
+// Write-route transport coverage. Domain-level tests exercise the
+// privileged functions directly, which cannot see the two pieces that
+// only exist at the HTTP boundary: the CSRF guard wrapping mutations
+// and the Idempotency-Key header reaching the ledger. A regression in
+// either would ship silently under the existing suite.
+
+func TestAdminWriteTransport(t *testing.T) {
+	conn := connect(t)
+	// The last-superadmin invariant is a post-mutation aggregate
+	// check, not a subject check: a suspend fails platform-wide when
+	// no ACTIVE superadmin remains. A superadmin actor satisfies it.
+	sec, cleanup := superActor(t, conn, "wt-sec")
+	defer cleanup()
+	victim, vcleanup := authFixture(t, conn, "wt-target")
+	defer vcleanup()
+
+	csrf := auth.NewCSRFManager(
+		[]byte("0123456789abcdef0123456789abcdef"),
+		time.Hour, false, []string{"https://app.test"})
+	gate := fakeGate{principal: auth.Principal{
+		User: auth.User{ID: sec.UserID},
+		Session: auth.Session{ID: sec.SessionID,
+			SecurityVersion: sec.SecurityVersion},
+	}}
+	mux := admin.NewRolesHandler(conn, gate, csrf, 1<<20,
+		admin.QuotaCeilings{}, nil).Mux()
+
+	ctx := context.Background()
+	var version int64
+	if err := conn.QueryRow(ctx,
+		`SELECT version FROM uptime.users WHERE id=$1`,
+		victim.UserID).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	path := "/admin/users/" + victim.UserID.String() + "/suspend"
+	body := func(reason string) string {
+		return `{"expected_version":` + itoa64(version) +
+			`,"reason":"` + reason + `"}`
+	}
+
+	issue := func() (cookie, token string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		tok, err := csrf.Issue(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ck string
+		for _, c := range rec.Result().Cookies() {
+			if strings.HasPrefix(c.Name, "uptime_csrf") {
+				ck = c.Name + "=" + c.Value
+			}
+		}
+		if ck == "" {
+			t.Fatal("csrf issue set no cookie")
+		}
+		return ck, tok
+	}
+	post := func(idemKey, payload string, withCSRF bool) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		if idemKey != "" {
+			req.Header.Set("Idempotency-Key", idemKey)
+		}
+		if withCSRF {
+			ck, tok := issue()
+			req.Header.Set("Cookie", ck)
+			req.Header.Set("X-CSRF-Token", tok)
+			req.Header.Set("Origin", "https://app.test")
+		}
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("mutation without csrf is 403 before session", func(t *testing.T) {
+		rec := post("", body("no csrf"), false)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("no csrf: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("suspend commits and replays under one key", func(t *testing.T) {
+		key := "wt-" + uuid.NewString()
+		first := post(key, body("first"), true)
+		if first.Code != http.StatusOK {
+			t.Fatalf("suspend: %d %s", first.Code, first.Body.String())
+		}
+		// Same key + same body replays the recorded response — no
+		// second mutation, no second audit row.
+		replay := post(key, body("first"), true)
+		if replay.Code != http.StatusOK ||
+			replay.Body.String() != first.Body.String() {
+			t.Fatalf("replay diverged: %d %s vs %d %s",
+				replay.Code, replay.Body.String(),
+				first.Code, first.Body.String())
+		}
+		var audits int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM uptime.audit_events
+			WHERE action='account.suspend' AND subject_id=$1`,
+			victim.UserID.String()).Scan(&audits); err != nil {
+			t.Fatal(err)
+		}
+		if audits != 1 {
+			t.Fatalf("audit rows = %d, want exactly 1 after replay", audits)
+		}
+		// Same key + different body is an idempotency conflict.
+		conflict := post(key, body("tampered"), true)
+		if conflict.Code != http.StatusConflict {
+			t.Fatalf("key reuse with new body: %d %s",
+				conflict.Code, conflict.Body.String())
+		}
+	})
+
+	t.Run("missing idempotency key is 422 not silent", func(t *testing.T) {
+		v2, vc := authFixture(t, conn, "wt-nokey")
+		defer vc()
+		var v2ver int64
+		if err := conn.QueryRow(ctx,
+			`SELECT version FROM uptime.users WHERE id=$1`,
+			v2.UserID).Scan(&v2ver); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost,
+			"/admin/users/"+v2.UserID.String()+"/suspend",
+			strings.NewReader(`{"expected_version":`+itoa64(v2ver)+
+				`,"reason":"no key"}`))
+		req.Header.Set("Content-Type", "application/json")
+		ck, tok := issue()
+		req.Header.Set("Cookie", ck)
+		req.Header.Set("X-CSRF-Token", tok)
+		req.Header.Set("Origin", "https://app.test")
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("no idempotency key: %d %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func itoa64(v int64) string { return strconv.FormatInt(v, 10) }
