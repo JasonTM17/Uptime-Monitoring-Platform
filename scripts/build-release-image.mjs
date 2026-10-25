@@ -28,6 +28,20 @@ const GO_IMAGE = "golang:1.27.3";
 
 function die(msg) { throw new Error(`build-release: ${msg}`); }
 
+// The manifest records what the committed LICENSE file actually says,
+// not what we hope. verify-container-release.mjs requires
+// `resolved:<spdx>` for the remote stage; anything unresolvable stays
+// pending and keeps publication blocked.
+function licenseStatus(root) {
+  const p = resolve(root, "LICENSE");
+  if (!existsSync(p)) return "pending-user-decision";
+  const first = readFileSync(p, "utf8")
+    .split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  if (/^MIT License$/i.test(first)) return "resolved:MIT";
+  if (/^Apache License$/i.test(first)) return "resolved:Apache-2.0";
+  return "pending-user-decision";
+}
+
 function run(argv, { input, env, quiet } = {}) {
   return new Promise((res, rej) => {
     const p = spawn(argv[0], argv.slice(1), {
@@ -321,7 +335,7 @@ async function main() {
     base: { image: "gcr.io/distroless/static-debian12:nonroot",
       digest: "sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab" },
     labels,
-    license_status: "pending-user-decision",
+    license_status: licenseStatus(ROOT),
     sbom: { format: "spdx-json", path: rel(sbomPath),
       subject_digest: subject },
     provenance: { mode: "sidecar-json", path: rel(provPath),
@@ -357,7 +371,7 @@ async function main() {
       ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
       dockerhub: "pending-user-namespace",
     },
-    publishable: false, // license pending + Docker Hub namespace pending
+    publishable: false, // confirmed registry namespace + owner publish authority still pending; license resolves from LICENSE
   };
   writeFileSync(output, JSON.stringify(manifest, null, 2));
   console.log(`[build] manifest: ${output}`);
