@@ -31,3 +31,17 @@ describes what was observed, not what was planned.
 - No repository settings beyond description/topics were mutated; branch
   protections, visibility, and collaborator state untouched.
 - Badges: none added — only actual evidence may back a badge later.
+
+## Checkpoint 2026-10-25 — license resolved
+
+| Field | Value | Source |
+|---|---|---|
+| License | **MIT** — `licenseInfo: {"key":"mit","name":"MIT License"}` | `gh repo view --json licenseInfo` readback 2026-10-25 |
+| LICENSE file | `MIT License`, Copyright (c) 2026 Nguyen Tien Son | committed (`538fe4f`), present at HEAD `3067b4d` |
+| Homepage | *(empty)* | still intentional — no hosted URL exists |
+
+The 2026-10-22 `licenseInfo: null` observation above is historical; the
+owner selected MIT and the remote now reflects it. Release manifests
+built after this checkpoint record `resolved:MIT` (derived from the
+committed LICENSE file). Publication remains NOT_RUN pending a confirmed
+Docker Hub namespace and explicit owner publish authority.

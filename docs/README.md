@@ -1,8 +1,10 @@
 # Documentation index
 
-Project đang ở giai đoạn **active implementation**. Auth/session,
-owned monitor APIs và notification channels đã có kèm contract tests;
-chưa có engine, delivery, admin hay public deployment để kiểm chứng.
+Engine, incident lifecycle, notification delivery, analytics và advanced
+admin/RBAC đã triển khai kèm contract/integration tests; local acceptance
+(harness `scripts/accept-local.mjs`) và container release gate local đã PASS
+tại các receipt trong `docs/releases/`. Chưa có public deployment để kiểm
+chứng — hosted gates vẫn NOT_RUN/BLOCKED theo `docs/releases/v0.1.0-evidence.md`.
 
 ## Public docs
 
@@ -26,10 +28,12 @@ chưa có engine, delivery, admin hay public deployment để kiểm chứng.
 - [Admin security race matrix](testing/admin-security.md): the
   privileged-recipe linearization order và its concurrency proofs.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
-- [Sampled statistics](architecture/statistics.md): denominator
-  partition, raw+hourly merge, represented-window contract.
   reservation → attempt → atomic finalize pipeline, failure-boundary
   semantics và fencing invariants.
+- [Sampled statistics](architecture/statistics.md): denominator
+  partition, raw+hourly merge, represented-window contract.
+- [Database design](architecture/database.md): ERD, table inventory và
+  schema-level invariants của schema `uptime` (dẫn từ `migrations/`).
 
 ## Private planning material
 
