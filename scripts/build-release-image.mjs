@@ -69,7 +69,7 @@ async function main() {
   const sourceDirty = dirtyOut.length > 0;
   if (sourceDirty) console.log(`[build] WARNING: build-visible paths dirty:\n${dirtyOut}`);
 
-  const ctxReceipt = resolve(outDir, "..", "build", "context-manifest.json");
+  const ctxReceipt = resolve(outDir, "context-manifest.json");
   mkdirSync(dirname(ctxReceipt), { recursive: true });
   console.log("[build] context privacy gate");
   await run(["node", "scripts/check-build-context.mjs", "--context", ".",
@@ -182,14 +182,25 @@ async function main() {
   } catch (e) { goFindings = `tool error: ${e.message.slice(0, 200)}`; }
 
   // ---------- 6. smoke: real migrated DB + runtime contract ----------
-  // The API exits when the DB is unreachable, so the smoke brings its
-  // own disposable postgres + migrate on a scratch network. Dummy creds
-  // only — the stack never leaves the loopback-bound docker network.
+  // The API exits when the DB is unreachable at startup, so the smoke
+  // brings its own disposable postgres + migrate on a scratch network.
+  // Dummy database creds only; one read-only HTTPS GET validates the
+  // final image's system CA bundle and outbound path.
   console.log("[build] image smoke (scratch pg + migrate + app)");
   const tag = Date.now();
   const net = `rel-smoke-net-${tag}`, pg = `rel-smoke-pg-${tag}`, app = `rel-smoke-app-${tag}`;
   const dsn = `postgres://smoke:smoke-dummy@${pg}:5432/smoke?sslmode=disable`;
-  const smoke = { ready200: false, sigterm_s: null };
+  const probePath = resolve(outDir, "release-smoke-probe");
+  await run(["docker", "run", "--rm", "-e", "CGO_ENABLED=0", "-e", "GOOS=linux", "-e", "GOARCH=amd64",
+    "-v", `${ROOT}:/src:ro`, "-v", `${outDir}:/out`, "-w", "/src", GO_IMAGE,
+    "go", "build", "-trimpath", "-buildvcs=false", "-o", "/out/release-smoke-probe",
+    "./scripts/release_smoke_probe.go"], { quiet: true });
+  const tlsProbeSha = `sha256:${createHash("sha256").update(readFileSync(probePath)).digest("hex")}`;
+  const buildScriptSha = `sha256:${createHash("sha256").update(
+    readFileSync(fileURLToPath(import.meta.url))).digest("hex")}`;
+  const smoke = { ready200: false, liveDbFree: false, caChainOutbound: false,
+    migratedDb: false, readOnlyRootfs: false, capabilitiesDropped: false,
+    noNewPrivileges: false, sigterm_s: null };
   const kill = (n) => run(["docker", "rm", "-f", n], { quiet: true }).catch(() => {});
   try {
     await run(["docker", "network", "create", net], { quiet: true });
@@ -206,6 +217,7 @@ async function main() {
       "-v", `${resolve(ROOT, "migrations")}:/migrations:ro`,
       "migrate/migrate:v4.20.1",
       "-path", "/migrations", "-database", dsn, "up"], { quiet: true });
+    smoke.migratedDb = true;
     await run(["docker", "run", "-d", "--rm", "--name", app, "--network", net,
       "-p", "127.0.0.1:18099:8080",
       "--read-only", "--tmpfs", "/tmp:size=8m,uid=65532,gid=65532",
@@ -214,12 +226,40 @@ async function main() {
       "-e", `DATABASE_URL=${dsn}`, "-e", `ENGINE_DATABASE_URL=${dsn}`,
       "-e", `MIGRATION_DATABASE_URL=${dsn}`, "-e", "NOTIFICATIONS_ENABLED=false",
       ref], { quiet: true }).catch((e) => die(`smoke run: ${e.message}`));
+    const runInspect = JSON.parse((await run(["docker", "inspect", app], { quiet: true })).out)[0];
+    smoke.readOnlyRootfs = runInspect.HostConfig.ReadonlyRootfs === true;
+    smoke.capabilitiesDropped = runInspect.HostConfig.CapDrop?.includes("ALL") ?? false;
+    smoke.noNewPrivileges = runInspect.HostConfig.SecurityOpt?.includes("no-new-privileges:true") ?? false;
+    if (!smoke.readOnlyRootfs || !smoke.capabilitiesDropped || !smoke.noNewPrivileges)
+      die("smoke container is missing read-only rootfs, cap-drop ALL, or no-new-privileges");
     for (let i = 0; i < 40 && !smoke.ready200; i++) {
       const r = await fetch("http://localhost:18099/health/ready").catch(() => null);
       if (r?.status === 200) smoke.ready200 = true;
       else await new Promise((r) => setTimeout(r, 1000));
     }
     if (smoke.ready200) {
+      // Run a static probe in the final image with its default non-root
+      // user and system CA bundle. The probe is mounted read-only because
+      // the release image has a read-only root filesystem.
+      const probeSource = probePath.replaceAll("\\", "/");
+      await run(["docker", "run", "--rm", "--network", net, "--read-only",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--mount", `type=bind,source=${probeSource},target=/usr/local/bin/release-smoke-probe,readonly`,
+        "--entrypoint", "/usr/local/bin/release-smoke-probe", ref, REPO_URL], { quiet: true });
+      smoke.caChainOutbound = true;
+
+      // Stop PostgreSQL and require readiness to fail while liveness
+      // continues to return 200. This proves the route is DB-free at runtime.
+      await run(["docker", "stop", "-t", "5", pg], { quiet: true });
+      for (let i = 0; i < 20 && !smoke.liveDbFree; i++) {
+        const [live, ready] = await Promise.all([
+          fetch("http://localhost:18099/health/live").catch(() => null),
+          fetch("http://localhost:18099/health/ready").catch(() => null),
+        ]);
+        if (live?.status === 200 && ready?.status !== 200) smoke.liveDbFree = true;
+        else await new Promise((r) => setTimeout(r, 1000));
+      }
+
       const t0 = Date.now();
       await run(["docker", "stop", "-t", "20", app], { quiet: true });
       smoke.sigterm_s = +((Date.now() - t0) / 1000).toFixed(2);
@@ -229,6 +269,8 @@ async function main() {
     await run(["docker", "network", "rm", net], { quiet: true }).catch(() => {});
   }
   if (!smoke.ready200) die("smoke: /health/ready never answered 200");
+  if (!smoke.liveDbFree) die("smoke: /health/live did not remain 200 with PostgreSQL stopped and readiness failing");
+  if (!smoke.caChainOutbound) die("smoke: final image did not verify the outbound HTTPS certificate chain");
   if (smoke.sigterm_s > 15) die(`smoke: SIGTERM stop ${smoke.sigterm_s}s exceeds contract`);
 
   // ---------- 7. provenance (subject-bound sidecar) ----------
@@ -244,7 +286,9 @@ async function main() {
       buildDefinition: {
         buildType: "https://devin.local/dockerfile-build/v1",
         externalParameters: { dockerfile: "Dockerfile", platform: "linux/amd64",
-          version, revision: sourceSha, context_receipt: ctxReceipt },
+          version, revision: sourceSha, context_receipt: ctxReceipt,
+          build_script_sha256: buildScriptSha, tls_probe_sha256: tlsProbeSha,
+          smoke_contract: "docs/releases/container-policy.md#4-pre-publish-gates" },
       },
       runDetails: { builder: { id: `docker ${(await run(["docker", "version", "--format", "{{.Server.Version}}"], { quiet: true })).out.trim()}` },
         metadata: { startedOn: created, finishedOn: new Date().toISOString() } },
@@ -285,14 +329,29 @@ async function main() {
     scan: {
       image_scanner: { tool: "trivy", tool_version: "0.76.0",
         image: TRIVY_IMAGE, db_timestamp: dbTs,
-        critical: crit, high: high, exceptions: [] },
+        critical: crit, high: high,
+        findings: vulns.map((v) => ({ cve: v.VulnerabilityID,
+          severity: v.Severity, package: v.PkgName,
+          installed_version: v.InstalledVersion, fixed_version: v.FixedVersion ?? null })),
+        exceptions: [] },
       source_scanner: { tool: "govulncheck", tool_version: "v1.1.4",
         mode: "binary", exit_code: goExit,
         limitation: "source mode unusable — x/tools SSA panics on this toolchain's AST (govulncheck v1.1.4 / x/tools v0.29.0); binary mode scans the shipped artifact's buildinfo instead",
         findings_tail: goFindings },
     },
-    smoke: { ready_probe_200: true, sigterm_stop_s: smoke.sigterm_s,
-      migrated_db: true, nonroot_user: insp.Config.User },
+    smoke: {
+      ready_probe_200: smoke.ready200,
+      live_db_free: smoke.liveDbFree,
+      ca_chain_outbound: smoke.caChainOutbound,
+      sigterm_stop_s: smoke.sigterm_s,
+      migrated_db: smoke.migratedDb,
+      nonroot_user: insp.Config.User,
+      read_only_rootfs: smoke.readOnlyRootfs,
+      capabilities_dropped: smoke.capabilitiesDropped,
+      no_new_privileges: smoke.noNewPrivileges,
+      build_script_sha256: buildScriptSha,
+      tls_probe_sha256: tlsProbeSha,
+    },
     context_receipt: rel(ctxReceipt),
     registries: {
       ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",

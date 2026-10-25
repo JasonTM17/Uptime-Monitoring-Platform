@@ -83,8 +83,47 @@ export function validateManifest(m, { stage = "local" } = {}) {
     errs.push(`sbom subject ${subj} != image digest ${imgDigest}`);
 
   const scan = m.scan?.image_scanner ?? {};
-  need(scan.critical === 0 || (scan.exceptions ?? []).some((x) => x.cve && x.owner && x.expiry),
-    `unwaived CRITICAL findings: ${scan.critical}`);
+  const findings = scan.findings;
+  need(Array.isArray(findings), "image_scanner.findings must record scanned vulnerability identities");
+  if (Array.isArray(findings)) {
+    const critical = findings.filter((x) => x.severity === "CRITICAL");
+    const high = findings.filter((x) => x.severity === "HIGH");
+    need(scan.critical === critical.length,
+      `CRITICAL count ${scan.critical} != recorded findings ${critical.length}`);
+    need(scan.high === high.length,
+      `HIGH count ${scan.high} != recorded findings ${high.length}`);
+    const exceptions = Array.isArray(scan.exceptions) ? scan.exceptions : [];
+    const validException = (x) => {
+      if (!/^CVE-\d{4}-\d{4,}$/i.test(x?.cve ?? "") ||
+        typeof x.impact !== "string" || !x.impact.trim() ||
+        typeof x.owner !== "string" || !x.owner.trim() ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(x.expiry ?? "")) return false;
+      const endOfExpiry = Date.parse(`${x.expiry}T23:59:59Z`);
+      return Number.isFinite(endOfExpiry) && endOfExpiry >= Date.now() &&
+        new Date(endOfExpiry).toISOString().slice(0, 10) === x.expiry;
+    };
+    const waived = (finding) => exceptions.some((x) =>
+      x?.cve?.toUpperCase() === finding.cve?.toUpperCase() && validException(x));
+    for (const finding of [...critical, ...high])
+      need(waived(finding), `unwaived ${finding.severity} finding: ${finding.cve ?? "identity missing"}`);
+  }
+  const smoke = m.smoke ?? {};
+  need(smoke.ready_probe_200 === true, "smoke.ready_probe_200 must be true after migration");
+  need(smoke.live_db_free === true, "smoke.live_db_free must be true during a database outage");
+  need(smoke.ca_chain_outbound === true, "smoke.ca_chain_outbound must prove verified HTTPS egress");
+  need(smoke.migrated_db === true, "smoke.migrated_db must be true");
+  need(smoke.read_only_rootfs === true, "smoke.read_only_rootfs must be true");
+  need(smoke.capabilities_dropped === true, "smoke.capabilities_dropped must be true");
+  need(smoke.no_new_privileges === true, "smoke.no_new_privileges must be true");
+  need(typeof smoke.nonroot_user === "string" && !!smoke.nonroot_user.trim() &&
+    !/^(?:0|root)(?::(?:0|root))?$/i.test(smoke.nonroot_user.trim()),
+    "smoke.nonroot_user must identify a non-root runtime user");
+  need(Number.isFinite(smoke.sigterm_stop_s) && smoke.sigterm_stop_s >= 0 && smoke.sigterm_stop_s <= 15,
+    `smoke.sigterm_stop_s '${smoke.sigterm_stop_s}' is missing or exceeds the 15s deadline`);
+  need(/^sha256:[0-9a-f]{64}$/.test(smoke.build_script_sha256 ?? ""),
+    "smoke.build_script_sha256 missing/malformed");
+  need(/^sha256:[0-9a-f]{64}$/.test(smoke.tls_probe_sha256 ?? ""),
+    "smoke.tls_probe_sha256 missing/malformed");
   const seenKeys = JSON.stringify([m.build_args, m.provenance, m.env, labels]);
   for (const mm of seenKeys.matchAll(/"([^"]*(?:token|secret|password|passwd|private[-_]?key|credential|api[-_]?key)[^"]*)"\s*:/gi))
     errs.push(`secret-named field in metadata: '${mm[1]}'`);

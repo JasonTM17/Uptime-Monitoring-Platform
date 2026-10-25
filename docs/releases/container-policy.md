@@ -55,8 +55,18 @@ Required OCI labels (all set at build, never from secrets):
    subject digest; vulnerability scan with pinned tool + recorded DB
    timestamp. High/critical findings are waived only via recorded
    exception (CVE + impact + owner + expiry) — never silently.
-5. Image smoke: non-root UID, read-only rootfs, SIGTERM deadline,
-   CA-chain outbound, `/health/live` DB-free, `/health/ready` post-migrate.
+5. Image smoke: non-root UID, read-only rootfs, all Linux capabilities
+   dropped, `no-new-privileges`, and SIGTERM deadline. After migration,
+   `/health/ready` must return 200. Then stop the disposable PostgreSQL
+   service and prove `/health/ready` fails while `/health/live` remains
+   200. Finally run a read-only HTTPS GET to
+   `https://github.com/JasonTM17/Uptime-Monitoring-Platform` from inside
+   the exact app image; require a verified certificate chain and a 2xx/3xx
+   response. This specifically tests the final image's system CA bundle,
+   DNS, and outbound path. If that public endpoint or outbound network is
+   unavailable, record the gate as failed/not-run; do not infer success
+   from a host-side TLS check. The manifest records each result and the
+   SHA-256 of the smoke helper and build script.
 6. Only then: authenticated publish, remote inspect, package
    association/visibility (the package readback), fresh **anonymous** pull + run in a
    disposable world (the distribution acceptance).
@@ -115,7 +125,12 @@ wrapper, consumed by verifier + publisher:
   "sbom": {"format": "spdx-json", "path": "…", "subject_digest": "sha256:…"},
   "provenance": {"mode": "max", "path": "…", "subject_digest": "sha256:…"},
   "scan": {"tool": "…", "tool_version": "…", "db_timestamp": "…",
-           "critical": 0, "high": 0, "exceptions": []},
+           "critical": 0, "high": 0,
+           "findings": [{"cve": "CVE-…", "severity": "HIGH",
+                         "package": "…", "installed_version": "…",
+                         "fixed_version": "… or null"}],
+           "exceptions": [{"cve": "CVE-…", "impact": "…",
+                           "owner": "…", "expiry": "YYYY-MM-DD"}]},
   "context_receipt": "artifacts/build/context-manifest.json",
   "registries": {
     "ghcr": "ghcr.io/jasontm17/uptime-monitoring-platform",

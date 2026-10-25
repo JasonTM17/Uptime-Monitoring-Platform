@@ -32,8 +32,20 @@ const base = () => ({
   sbom: { format: "spdx-json", path: "sbom.spdx.json", subject_digest: `sha256:${SHA}` },
   provenance: { mode: "sidecar-json", path: "provenance.json", subject_digest: `sha256:${SHA}` },
   scan: { image_scanner: { tool: "trivy", tool_version: "0.76.0",
-    db_timestamp: "2026-10-22", critical: 0, high: 0, exceptions: [] } },
-  smoke: { ready_probe_200: true, sigterm_stop_s: 0.5, migrated_db: true, nonroot_user: "65532:65532" },
+    db_timestamp: "2026-10-22", critical: 0, high: 0, findings: [], exceptions: [] } },
+  smoke: {
+    ready_probe_200: true,
+    live_db_free: true,
+    ca_chain_outbound: true,
+    sigterm_stop_s: 0.5,
+    migrated_db: true,
+    nonroot_user: "65532:65532",
+    read_only_rootfs: true,
+    capabilities_dropped: true,
+    no_new_privileges: true,
+    build_script_sha256: `sha256:${SHA}`,
+    tls_probe_sha256: `sha256:${SHA}`,
+  },
   context_receipt: "artifacts/build/context-manifest.json",
   registries: { ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
     dockerhub: "jasontm17/uptime-monitoring-platform" },
@@ -53,16 +65,56 @@ test("TestRejectMissingPlatform", () => {
 });
 
 test("TestRejectCriticalFinding", () => {
-  const errs = rejects((m) => { m.scan.image_scanner.critical = 2; });
-  assert.ok(errs.some((e) => /CRITICAL/.test(e)), errs.join("|"));
+  const errs = rejects((m) => {
+    m.scan.image_scanner.critical = 1;
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0001", severity: "CRITICAL" }];
+  });
+  assert.ok(errs.some((e) => /unwaived CRITICAL/.test(e)), errs.join("|"));
+});
+
+test("TestRejectHighFinding", () => {
+  const errs = rejects((m) => {
+    m.scan.image_scanner.high = 1;
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0002", severity: "HIGH" }];
+  });
+  assert.ok(errs.some((e) => /unwaived HIGH/.test(e)), errs.join("|"));
 });
 
 test("TestRejectCriticalWaivedProperly", () => {
   const errs = rejects((m) => {
     m.scan.image_scanner.critical = 1;
-    m.scan.image_scanner.exceptions = [{ cve: "CVE-2026-0001", owner: "ops", expiry: "2027-01-01" }];
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0001", severity: "CRITICAL" }];
+    m.scan.image_scanner.exceptions = [{ cve: "CVE-2026-0001", impact: "Unreachable code path",
+      owner: "ops", expiry: "2027-01-01" }];
   });
   assert.ok(!errs.some((e) => /CRITICAL/.test(e)), errs.join("|"));
+});
+
+test("TestRejectIncompleteFindingException", () => {
+  const errs = rejects((m) => {
+    m.scan.image_scanner.high = 1;
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0003", severity: "HIGH" }];
+    m.scan.image_scanner.exceptions = [{ cve: "CVE-2026-0003", owner: "ops", expiry: "2027-01-01" }];
+  });
+  assert.ok(errs.some((e) => /unwaived HIGH/.test(e)), errs.join("|"));
+});
+
+test("TestRejectExpiredFindingException", () => {
+  const errs = rejects((m) => {
+    m.scan.image_scanner.high = 1;
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0004", severity: "HIGH" }];
+    m.scan.image_scanner.exceptions = [{ cve: "CVE-2026-0004", impact: "Accepted temporarily",
+      owner: "ops", expiry: "2026-01-01" }];
+  });
+  assert.ok(errs.some((e) => /unwaived HIGH/.test(e)), errs.join("|"));
+});
+
+test("TestRejectScanCountMismatch", () => {
+  const errs = rejects((m) => {
+    m.scan.image_scanner.high = 0;
+    m.scan.image_scanner.findings = [{ cve: "CVE-2026-0005", severity: "HIGH" }];
+  });
+  assert.ok(errs.some((e) => /count .* != recorded findings/.test(e)), errs.join("|"));
 });
 
 test("TestRejectSecretBuildArg", () => {
@@ -93,6 +145,21 @@ test("TestRejectMissingSourceSHA", () => {
 test("TestRejectMissingLicense", () => {
   const errs = rejects((m) => { delete m.license_status; });
   assert.ok(errs.some((e) => /license/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingDBFreeLiveness", () => {
+  const errs = rejects((m) => { m.smoke.live_db_free = false; });
+  assert.ok(errs.some((e) => /live_db_free/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingCAChain", () => {
+  const errs = rejects((m) => { delete m.smoke.ca_chain_outbound; });
+  assert.ok(errs.some((e) => /ca_chain_outbound/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingRuntimeHardening", () => {
+  const errs = rejects((m) => { m.smoke.read_only_rootfs = false; });
+  assert.ok(errs.some((e) => /read_only_rootfs/.test(e)), errs.join("|"));
 });
 
 test("TestRejectPendingLicenseRemote", () => {
