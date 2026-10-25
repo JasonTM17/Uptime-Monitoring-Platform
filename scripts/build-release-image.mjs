@@ -68,6 +68,14 @@ async function main() {
     args[process.argv[i].replace(/^--/, "")] = process.argv[i + 1];
   const version = args.version ?? die("--version required");
   const output = resolve(args.output ?? die("--output required"));
+  // Docker Hub destination is an owner-provided fact, never a default.
+  // Unresolved stays in the manifest as the literal pending marker, which
+  // verify-container-release.mjs --stage remote refuses (R24 dual-registry).
+  const dockerhubNs = args["dockerhub-namespace"] ?? process.env.DOCKERHUB_NAMESPACE
+    ?? "pending-user-namespace";
+  if (dockerhubNs !== "pending-user-namespace" &&
+      !/^[a-z0-9_-]+\/[a-z0-9._-]{1,100}$/.test(dockerhubNs))
+    die(`--dockerhub-namespace '${dockerhubNs}' is not <user>/<repo>`);
   if (!/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
     die(`version '${version}' is not semver-shaped (v<semver>)`);
   mkdirSync(dirname(output), { recursive: true });
@@ -369,9 +377,12 @@ async function main() {
     context_receipt: rel(ctxReceipt),
     registries: {
       ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
-      dockerhub: "pending-user-namespace",
+      dockerhub: dockerhubNs,
     },
-    publishable: false, // confirmed registry namespace + owner publish authority still pending; license resolves from LICENSE
+    publishable: dockerhubNs !== "pending-user-namespace",
+    // publishable = artifact-level prereqs met (license resolved + namespace
+    // recorded). It is NOT publish authority: an actual push still requires
+    // the owner's explicit instruction and registry credentials.
   };
   writeFileSync(output, JSON.stringify(manifest, null, 2));
   console.log(`[build] manifest: ${output}`);
