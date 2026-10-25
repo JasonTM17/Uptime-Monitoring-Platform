@@ -119,7 +119,10 @@ test.describe("user monitor journeys", () => {
       },
     );
     await page.goto("/");
-    await page.getByLabel("Filter by paused").selectOption("true");
+    await page
+      .getByRole("group", { name: "Filter by paused" })
+      .getByRole("button", { name: "Paused" })
+      .click();
     await expect(page.getByText("legacy endpoint")).toBeVisible();
     expect(sawPausedParam).toBe(true);
   });

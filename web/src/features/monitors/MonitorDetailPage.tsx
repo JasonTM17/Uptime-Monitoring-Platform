@@ -7,6 +7,7 @@ import { useSession } from "../auth/session";
 import { AvailabilityPanel } from "../monitor-detail/AvailabilityPanel";
 import { ChecksTable } from "../monitor-detail/ChecksTable";
 import { StatsPanel } from "../monitor-detail/StatsPanel";
+import { UptimeStrip } from "../monitor-detail/UptimeStrip";
 import { DeleteMonitorDialog } from "./DeleteMonitorDialog";
 import { MonitorActions, useActionGuard } from "./MonitorActions";
 import { MonitorForm, type MonitorFormValues } from "./MonitorForm";
@@ -240,6 +241,7 @@ export function MonitorDetailPage() {
             )}
           </section>
 
+          <UptimeStrip monitorId={m.id} />
           <StatsPanel monitorId={m.id} />
           <AvailabilityPanel monitorId={m.id} />
           <ChecksTable monitorId={m.id} />

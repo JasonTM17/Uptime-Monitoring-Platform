@@ -135,8 +135,10 @@ test.describe("responsive + accessibility matrix", () => {
     const detail = page.getByRole("link", { name: /billing api/i }).first();
     await detail.focus();
     await expect(detail).toBeFocused();
-    // filter controls are operable
-    const filter = page.getByLabel("Filter by health");
+    // filter controls are operable (segmented pills, keyboard reachable)
+    const filter = page
+      .getByRole("group", { name: "Filter by health" })
+      .getByRole("button", { name: "UP" });
     await filter.focus();
     await expect(filter).toBeFocused();
   });

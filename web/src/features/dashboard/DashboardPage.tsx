@@ -2,6 +2,8 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { useSession } from "../auth/session";
+import { SegmentedControl } from "../../components/SegmentedControl";
+import { formatDuration } from "../../lib/format";
 import { MonitorTable } from "./MonitorTable";
 import {
   fetchMonitors,
@@ -12,6 +14,19 @@ import { SummaryStats } from "./SummaryStats";
 import { useState } from "react";
 
 const POLL_MS = 20_000;
+
+const HEALTH_OPTS = [
+  { value: "", label: "All health" },
+  { value: "UP", label: "UP" },
+  { value: "DOWN", label: "DOWN" },
+  { value: "UNKNOWN", label: "UNKNOWN" },
+] as const;
+
+const PAUSED_OPTS = [
+  { value: "", label: "All" },
+  { value: "false", label: "Active" },
+  { value: "true", label: "Paused" },
+] as const;
 
 function useOnline() {
   return useSyncExternalStore(
@@ -96,6 +111,18 @@ export function DashboardPage() {
                 >
                   {i.monitor_name ?? "monitor"}
                 </Link>
+                {i.opened_at && (
+                  <span
+                    className="font-mono text-xs text-fg-muted"
+                    title={
+                      i.resolved_at
+                        ? `opened ${new Date(i.opened_at).toLocaleString()}, resolved ${new Date(i.resolved_at).toLocaleString()}`
+                        : `opened ${new Date(i.opened_at).toLocaleString()}`
+                    }
+                  >
+                    {formatDuration(i.opened_at, i.resolved_at)}
+                  </span>
+                )}
                 <span
                   className={
                     i.resolved_at
@@ -113,37 +140,28 @@ export function DashboardPage() {
 
       <section aria-label="Monitors">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <select
-            aria-label="Filter by health"
-            value={filters.health ?? ""}
-            onChange={(e) =>
+          <SegmentedControl
+            label="Filter by health"
+            value={(filters.health ?? "") as "" | "UP" | "DOWN" | "UNKNOWN"}
+            options={HEALTH_OPTS}
+            onChange={(v) =>
               setFilters((f) => ({
                 ...f,
-                health: (e.target.value || undefined) as MonitorFilters["health"],
+                health: (v || undefined) as MonitorFilters["health"],
               }))
             }
-            className="rounded border border-border bg-container px-2 py-1 text-sm"
-          >
-            <option value="">All health</option>
-            <option value="UP">UP</option>
-            <option value="DOWN">DOWN</option>
-            <option value="UNKNOWN">UNKNOWN</option>
-          </select>
-          <select
-            aria-label="Filter by paused"
-            value={filters.paused ?? ""}
-            onChange={(e) =>
+          />
+          <SegmentedControl
+            label="Filter by paused"
+            value={(filters.paused ?? "") as "" | "false" | "true"}
+            options={PAUSED_OPTS}
+            onChange={(v) =>
               setFilters((f) => ({
                 ...f,
-                paused: (e.target.value || undefined) as MonitorFilters["paused"],
+                paused: (v || undefined) as MonitorFilters["paused"],
               }))
             }
-            className="rounded border border-border bg-container px-2 py-1 text-sm"
-          >
-            <option value="">Active + paused</option>
-            <option value="false">Active only</option>
-            <option value="true">Paused only</option>
-          </select>
+          />
           <input
             type="search"
             aria-label="Search by name"

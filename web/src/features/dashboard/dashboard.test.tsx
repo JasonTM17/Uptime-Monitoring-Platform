@@ -220,4 +220,61 @@ describe("dashboard", () => {
     ).toBeInTheDocument();
     },
   );
+
+  it("filter pills drive query params and rows show latency/method/next", async () => {
+    let sawPaused = false;
+    const soon = new Date(Date.now() + 45_000).toISOString();
+    const recent = new Date(Date.now() - 5_000).toISOString();
+    handler = (url) => {
+      if (url === "/api/auth/me") return authedMe();
+      if (url === "/api/dashboard/summary") return res({ data: summary({}) });
+      if (url.startsWith("/api/monitors")) {
+        if (new URL(url, "http://x").searchParams.get("paused") === "true")
+          sawPaused = true;
+        return res({
+          data: {
+            items: [
+              monitor({
+                id: "m1",
+                name: "row-one",
+                last_response_time_ms: 87,
+                next_check_at: soon,
+                last_checked_at: recent,
+              }),
+            ],
+            has_more: false,
+            next_cursor: null,
+          },
+        });
+      }
+      if (url === "/api/admin/overview") return res({}, 403);
+      return res({}, 404);
+    };
+    renderApp();
+    const table = await screen.findByRole("table");
+    // richer row: method chip, latency, relative last check, next-check countdown
+    expect(within(table).getByText("GET")).toBeInTheDocument();
+    expect(within(table).getByText("87ms")).toBeInTheDocument();
+    expect(within(table).getByText(/^[0-9]+s ago$/)).toBeInTheDocument();
+    expect(within(table).getByText(/^4[0-9]s$/)).toBeInTheDocument();
+
+    const paused = screen
+      .getByRole("group", { name: "Filter by paused" })
+      .querySelector("[aria-pressed='true']");
+    expect(paused).toHaveTextContent("All");
+    await userEvent.click(
+      within(
+        screen.getByRole("group", { name: "Filter by paused" }),
+      ).getByRole("button", { name: "Paused" }),
+    );
+    await screen.findByText("row-one");
+    expect(sawPaused).toBe(true);
+    const health = screen.getByRole("group", { name: "Filter by health" });
+    await userEvent.click(
+      within(health).getByRole("button", { name: "DOWN" }),
+    );
+    expect(
+      within(health).getByRole("button", { name: "DOWN" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
 });
