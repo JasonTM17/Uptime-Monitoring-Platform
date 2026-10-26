@@ -7,7 +7,7 @@ All notable changes to this project are documented here. Dates are UTC.
 The first complete candidate: the full product runs against the composed
 harness with evidence-backed gates. The MIT license is committed. The
 container image is published to Docker Hub; GHCR publication is pushed
-but remains private pending a package-settings change. Hosted deployment
+and is public (not yet linked to the repository). Hosted deployment
 is not included. Registry digests are recorded in
 `docs/releases/v0.1.0-evidence.md`.
 
