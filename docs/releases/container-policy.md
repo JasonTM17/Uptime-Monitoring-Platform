@@ -7,7 +7,7 @@ This document defines the gates and identities required for container distributi
 | Registry | Image reference | Publication contract |
 | --- | --- | --- |
 | GHCR | `ghcr.io/jasontm17/uptime-monitoring-platform` | Publish with job-scoped `packages: write`; verify package visibility and source association after publication. |
-| Docker Hub | `nguyenson1710/uptime-monitoring-platform` | Owner-confirmed destination. Configure `DOCKERHUB_USERNAME` and `DOCKERHUB_NAMESPACE` (`nguyenson1710/uptime-monitoring-platform`) as repository variables plus `DOCKERHUB_TOKEN` as a repository secret. Never infer a destination from the GitHub account or a public profile. |
+| Docker Hub | `<owner>/<repository>` | Requires explicit owner confirmation. Configure `DOCKERHUB_USERNAME` and the full-image-reference `DOCKERHUB_NAMESPACE` as repository variables plus `DOCKERHUB_TOKEN` as a repository secret. Never infer a destination from the GitHub account or a public profile. |
 
 GitHub Packages source association uses the OCI
 `org.opencontainers.image.source` label → `JasonTM17/Uptime-Monitoring-Platform`.
@@ -57,7 +57,8 @@ paths, usernames, or credentials in labels/args/history.
    exception (CVE + impact + owner + expiry) — never silently.
    Go reachability uses pinned `govulncheck v1.1.4` binary mode on a
    symbol-preserving companion built from the same source SHA, version, and
-   platform as the stripped runtime image. The release artifact retains the
+   platform as the stripped runtime image, using the same digest-pinned Go
+   builder image as the runtime build. The release artifact retains the
    companion binary. Local and remote verification recompute its SHA-256 and
    confirm the embedded source SHA and version. The manifest binds that
    digest to the runtime image and context hash; missing artifacts, a wrong

@@ -25,7 +25,7 @@ const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
 const TRIVY_IMAGE = "aquasec/trivy:0.76.0"; // pinned: released 2026-10-14, >7d
 const GOVULNCHECK_VERSION = "v1.1.4";
 const GOVULNCHECK = `golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}`;
-const GO_IMAGE = "golang:1.27.3";
+const GO_IMAGE = "golang:1.27.3@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc";
 const RELEASE_INPUT_PATHS = [
   "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "LICENSE",
   "go.mod", "go.sum", "cmd", "internal", "migrations",
