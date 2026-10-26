@@ -2,7 +2,16 @@
 // section maps to a fixture below. Run: node --test scripts/verify-container-release.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateManifest } from "./verify-container-release.mjs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs, validateManifest } from "./verify-container-release.mjs";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SCRIPT = fileURLToPath(new URL("./verify-container-release.mjs", import.meta.url));
 
 const SHA = "a".repeat(64);
 const base = () => ({
@@ -27,6 +36,7 @@ const base = () => ({
     "org.opencontainers.image.source": "https://github.com/JasonTM17/Uptime-Monitoring-Platform",
     "org.opencontainers.image.revision": "b".repeat(40),
     "org.opencontainers.image.version": "v0.1.0-rc.1",
+    "org.opencontainers.image.licenses": "MIT",
   },
   license_status: "resolved:MIT",
   sbom: { format: "spdx-json", path: "sbom.spdx.json", subject_digest: `sha256:${SHA}` },
@@ -46,7 +56,7 @@ const base = () => ({
     build_script_sha256: `sha256:${SHA}`,
     tls_probe_sha256: `sha256:${SHA}`,
   },
-  context_receipt: "artifacts/build/context-manifest.json",
+  context_receipt_sha256: `sha256:${SHA}`,
   registries: { ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
     dockerhub: "jasontm17/uptime-monitoring-platform" },
   publishable: true,
@@ -142,9 +152,127 @@ test("TestRejectMissingSourceSHA", () => {
   assert.ok(errs.some((e) => /source_sha/.test(e)), errs.join("|"));
 });
 
+test("TestRejectMissingContextReceiptDigest", () => {
+  const errs = rejects((m) => { delete m.context_receipt_sha256; });
+  assert.ok(errs.some((e) => /context_receipt_sha256 missing\/malformed/.test(e)), errs.join("|"));
+});
+
 test("TestRejectMissingLicense", () => {
   const errs = rejects((m) => { delete m.license_status; });
   assert.ok(errs.some((e) => /license/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMismatchedLicenseLabel", () => {
+  const errs = rejects((m) => { m.labels["org.opencontainers.image.licenses"] = "Apache-2.0"; });
+  assert.ok(errs.some((e) => /license label/.test(e)), errs.join("|"));
+});
+
+test("TestRejectEmptyResolvedLicenseRemote", () => {
+  const errs = rejects((m) => { m.license_status = "resolved:"; }, "remote");
+  assert.ok(errs.some((e) => /nonempty resolved:<spdx>/.test(e)), errs.join("|"));
+});
+
+test("rejects OCI config labels that disagree with the manifest", () => {
+  const dir = mkdtempSync(join(ROOT, ".verifier-oci-label-test-"));
+  const layout = join(dir, "layout");
+  const archive = join(dir, "image.oci.tar");
+  const manifestPath = join(dir, "manifest.json");
+  const output = join(dir, "verification.json");
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const writeBlob = (digest, bytes) => {
+    const blobPath = join(layout, "blobs", "sha256", digest.slice("sha256:".length));
+    mkdirSync(dirname(blobPath), { recursive: true });
+    writeFileSync(blobPath, bytes);
+  };
+
+  try {
+    const m = base();
+    const layerBytes = Buffer.from("oci-layer-fixture");
+    const layerDigest = `sha256:${hash(layerBytes)}`;
+    const configBytes = Buffer.from(JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      config: { User: "65532:65532", Labels: {
+        ...m.labels,
+        "org.opencontainers.image.licenses": "Apache-2.0",
+      } },
+      rootfs: { type: "layers", diff_ids: [] },
+    }));
+    const configDigest = `sha256:${hash(configBytes)}`;
+    const imageManifestBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: { mediaType: "application/vnd.oci.image.config.v1+json",
+        digest: configDigest, size: configBytes.length },
+      layers: [{ mediaType: "application/vnd.oci.image.layer.v1.tar",
+        digest: layerDigest, size: layerBytes.length }],
+    }));
+    const imageDigest = `sha256:${hash(imageManifestBytes)}`;
+    const attestationBytes = Buffer.from(JSON.stringify({ subject: { digest: imageDigest } }));
+    const attestationDigest = `sha256:${hash(attestationBytes)}`;
+    const listBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      manifests: [
+        { mediaType: "application/vnd.oci.image.manifest.v1+json",
+          digest: imageDigest, size: imageManifestBytes.length,
+          platform: { architecture: "amd64", os: "linux" } },
+        { mediaType: "application/vnd.oci.image.manifest.v1+json",
+          digest: attestationDigest, size: attestationBytes.length,
+          annotations: { "vnd.docker.reference.type": "attestation-manifest" } },
+      ],
+    }));
+    const listDigest = `sha256:${hash(listBytes)}`;
+    const indexBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      manifests: [{ mediaType: "application/vnd.oci.image.index.v1+json",
+        digest: listDigest, size: listBytes.length }],
+    }));
+    mkdirSync(layout, { recursive: true });
+    writeFileSync(join(layout, "index.json"), indexBytes);
+    writeBlob(listDigest, listBytes);
+    writeBlob(imageDigest, imageManifestBytes);
+    writeBlob(attestationDigest, attestationBytes);
+    writeBlob(configDigest, configBytes);
+    writeBlob(layerDigest, layerBytes);
+
+    const archiveRelative = relative(ROOT, archive).replaceAll("\\", "/");
+    const packed = spawnSync("tar", ["-cf", archiveRelative, "-C", layout, "index.json", "blobs"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.ifError(packed.error);
+    assert.equal(packed.status, 0, packed.stderr);
+
+    m.image.index_digest = listDigest;
+    m.image.image_manifest_digest = imageDigest;
+    m.image.config_digest = configDigest;
+    m.image.attestation_digest = attestationDigest;
+    m.image.layer_digests = [layerDigest];
+    m.image.archive = archiveRelative;
+    m.image.archive_sha256 = `sha256:${hash(readFileSync(archive))}`;
+    m.sbom.subject_digest = listDigest;
+    m.provenance.subject_digest = listDigest;
+    writeFileSync(manifestPath, JSON.stringify(m));
+
+    const child = spawnSync(process.execPath, [SCRIPT,
+      "--manifest", manifestPath, "--output", output, "--stage", "local"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.ifError(child.error);
+    assert.equal(child.status, 1, child.stdout);
+    const receipt = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(receipt.checks.find((check) => check.name === "manifest-contract").ok, true);
+    assert.equal(receipt.checks.find((check) => check.name === "archive-integrity").ok, true);
+    const chain = receipt.checks.find((check) => check.name === "oci-chain");
+    assert.equal(chain.ok, false);
+    assert.match(chain.detail, /OCI config labels != manifest labels/);
+  } finally {
+    const relDir = relative(ROOT, resolve(dir));
+    assert.ok(relDir && relDir !== "." && !relDir.startsWith("..") && !isAbsolute(relDir),
+      "temporary OCI fixture must remain below the repository root");
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("TestRejectMissingDBFreeLiveness", () => {
@@ -172,4 +300,45 @@ test("TestAcceptValidLocal", () => {
   m.license_status = "pending-user-decision"; // local candidate may be pending
   const errs = validateManifest(m, { stage: "local" });
   assert.deepEqual(errs, [], errs.join("|"));
+});
+
+test("bare anonymous flag does not consume the following option", () => {
+  assert.deepEqual(parseArgs(["--anonymous", "--manifest", "manifest.json"]), {
+    anonymous: "true",
+    manifest: "manifest.json",
+  });
+});
+
+test("anonymous flag accepts explicit true and false values", () => {
+  assert.deepEqual(parseArgs(["--anonymous", "true"]), { anonymous: "true" });
+  assert.deepEqual(parseArgs(["--anonymous", "false"]), { anonymous: "false" });
+});
+
+test("bare anonymous flag executes the gate and writes its failure receipt", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uptime-anonymous-verifier-"));
+  const manifest = join(dir, "manifest.json");
+  const output = join(dir, "verification.json");
+  try {
+    writeFileSync(manifest, JSON.stringify({ image: { archive: "missing.oci.tar" } }));
+    const child = spawnSync(process.execPath, [SCRIPT,
+      "--manifest", manifest, "--output", output, "--stage", "local", "--anonymous"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.ifError(child.error);
+    assert.equal(child.status, 1, child.stdout);
+
+    const receipt = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(receipt.verdict, "FAIL");
+    assert.deepEqual(receipt.anonymous.commands, []);
+    assert.equal(receipt.anonymous.docker_config, "<task-temp, scrubbed>");
+    const receiptsCheck = receipt.checks.find((check) => check.name === "receipts-present");
+    assert.deepEqual(receiptsCheck, {
+      name: "receipts-present",
+      ok: false,
+      detail: "no publication receipts — C85 not run",
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

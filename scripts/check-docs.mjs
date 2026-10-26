@@ -24,6 +24,8 @@ for (let i = 2; i < process.argv.length; i++) {
 const PRIVATE_MARKERS = [
   { re: /(^|[^\w])(plans|private|\.private)\//i, what: "private plan/report path" },
   { re: /docs\/(private|internal)\//i, what: "private docs path" },
+  { re: /\b(?:plans?|roadmap)\b[\s\S]{0,100}\b\d+\s+phases?\s*(?:,|\/|and|&)\s*\d+\s+(?:focused\s+)?commits?\b/i,
+    what: "private roadmap summary", redact: true },
   { re: /execution-ledger/i, what: "private execution ledger" },
   { re: /(C:\\Users|\/home\/[a-z]|\/Users\/[a-z]|D:\\)/i, what: "host-local path" },
   { re: /spec1[0-9]|phase-0[0-9]-|phase-1[0-9]-/i, what: "internal plan spec/card ref" },
@@ -59,9 +61,10 @@ async function privacy() {
     if (!existsSync(f)) continue;
     const text = readFileSync(f, "utf8");
     const rel = f.replace(ROOT, "").replaceAll("\\", "/").slice(1);
-    for (const { re, what } of [...PRIVATE_MARKERS, ...CRED_SHAPES]) {
+    for (const { re, what, redact } of [...PRIVATE_MARKERS, ...CRED_SHAPES]) {
       const m = text.match(re);
-      if (m) findings.push({ file: rel, what, sample: (m[0] ?? "").slice(0, 60) });
+      if (m) findings.push({ file: rel, what,
+        sample: redact ? "[redacted]" : (m[0] ?? "").slice(0, 60) });
     }
   }
   // media privacy: binary files can't be text-scanned; enforce the

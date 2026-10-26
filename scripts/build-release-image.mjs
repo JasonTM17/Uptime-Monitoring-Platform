@@ -28,6 +28,23 @@ const GO_IMAGE = "golang:1.27.3";
 
 function die(msg) { throw new Error(`build-release: ${msg}`); }
 
+export function sanitizeGovulncheckFailure(error) {
+  const message = typeof error?.message === "string" ? error.message : "";
+  const exit = / -> (\d+)(?::|$)/.exec(message)?.[1];
+  const exitCode = exit === undefined ? null : Number(exit);
+  return {
+    exitCode,
+    findingsTail: exitCode === null
+      ? "tool error: govulncheck binary scan invocation failed"
+      : `tool error: govulncheck binary scan exited ${exitCode}`,
+  };
+}
+
+export function isArtifactPublishable(licenseInfo, dockerhubNs) {
+  return /^resolved:[A-Za-z0-9.+-]+$/.test(licenseInfo ?? "") &&
+    dockerhubNs !== "pending-user-namespace";
+}
+
 // The manifest records what the committed LICENSE file actually says,
 // not what we hope. verify-container-release.mjs requires
 // `resolved:<spdx>` for the remote stage; anything unresolvable stays
@@ -73,6 +90,8 @@ async function main() {
   // verify-container-release.mjs --stage remote refuses (R24 dual-registry).
   const dockerhubNs = args["dockerhub-namespace"] ?? process.env.DOCKERHUB_NAMESPACE
     ?? "pending-user-namespace";
+  const licenseInfo = licenseStatus(ROOT);
+  const licenseId = /^resolved:(.+)$/.exec(licenseInfo)?.[1];
   if (dockerhubNs !== "pending-user-namespace" &&
       !/^[a-z0-9_-]+\/[a-z0-9._-]{1,100}$/.test(dockerhubNs))
     die(`--dockerhub-namespace '${dockerhubNs}' is not <user>/<repo>`);
@@ -97,6 +116,7 @@ async function main() {
   await run(["node", "scripts/check-build-context.mjs", "--context", ".",
     "--dockerfile", "Dockerfile", "--verify-sentinels",
     "--output", ctxReceipt]);
+  const ctxReceiptSha = `sha256:${sha256(readFileSync(ctxReceipt))}`;
 
   // ---------- 1. one build, two exports ----------
   // A single buildx invocation emits (a) the daemon image used by
@@ -117,6 +137,7 @@ async function main() {
     "--label", "org.opencontainers.image.title=uptime-platform-api",
     "--label", "org.opencontainers.image.description=local-first uptime monitoring platform (release candidate)",
     "--label", `org.opencontainers.image.url=${REPO_URL}`,
+    ...(licenseId ? ["--label", `org.opencontainers.image.licenses=${licenseId}`] : []),
     "-t", ref, "-t", shaRef,
     "-o", "type=docker", "-o", `type=oci,dest=${archPath}`, "."]);
 
@@ -196,12 +217,17 @@ async function main() {
       `go install ${GOVULNCHECK} >/dev/null 2>&1 && govulncheck -mode binary -format text '${rel(binPath)}' > /tmp/govc.txt 2>&1; ec=$?; echo EXIT:$ec; tail -15 /tmp/govc.txt; echo DEPS_OPENPGP:$(go list -deps ./cmd/api 2>/dev/null | grep -c openpgp)`],
       { quiet: true });
     const lines = gv.out.trim().split("\n");
-    goExit = /^EXIT:(\d+)/.exec(lines[0])?.[1] ?? null;
+    const exit = /^EXIT:(\d+)/.exec(lines[0])?.[1];
+    goExit = exit === undefined ? null : Number(exit);
     const depCount = /DEPS_OPENPGP:(\d+)/.exec(lines[lines.length - 1])?.[1];
     goFindings = lines.slice(1).join("\n").slice(-600) +
       `\ncounter-evidence: cmd/api import closure contains ${depCount ?? "?"} openpgp packages` +
       ` (go list -deps; strings-in-binary check corroborates when 0)`;
-  } catch (e) { goFindings = `tool error: ${e.message.slice(0, 200)}`; }
+  } catch (e) {
+    const failure = sanitizeGovulncheckFailure(e);
+    goExit = failure.exitCode;
+    goFindings = failure.findingsTail;
+  }
 
   // ---------- 6. smoke: real migrated DB + runtime contract ----------
   // The API exits when the DB is unreachable at startup, so the smoke
@@ -308,7 +334,7 @@ async function main() {
       buildDefinition: {
         buildType: "https://devin.local/dockerfile-build/v1",
         externalParameters: { dockerfile: "Dockerfile", platform: "linux/amd64",
-          version, revision: sourceSha, context_receipt: ctxReceipt,
+          version, revision: sourceSha, context_receipt_sha256: ctxReceiptSha,
           build_script_sha256: buildScriptSha, tls_probe_sha256: tlsProbeSha,
           smoke_contract: "docs/releases/container-policy.md#4-pre-publish-gates" },
       },
@@ -343,7 +369,7 @@ async function main() {
     base: { image: "gcr.io/distroless/static-debian12:nonroot",
       digest: "sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab" },
     labels,
-    license_status: licenseStatus(ROOT),
+    license_status: licenseInfo,
     sbom: { format: "spdx-json", path: rel(sbomPath),
       subject_digest: subject },
     provenance: { mode: "sidecar-json", path: rel(provPath),
@@ -374,12 +400,12 @@ async function main() {
       build_script_sha256: buildScriptSha,
       tls_probe_sha256: tlsProbeSha,
     },
-    context_receipt: rel(ctxReceipt),
+    context_receipt_sha256: ctxReceiptSha,
     registries: {
       ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
       dockerhub: dockerhubNs,
     },
-    publishable: dockerhubNs !== "pending-user-namespace",
+    publishable: isArtifactPublishable(licenseInfo, dockerhubNs),
     // publishable = artifact-level prereqs met (license resolved + namespace
     // recorded). It is NOT publish authority: an actual push still requires
     // the owner's explicit instruction and registry credentials.
@@ -390,4 +416,5 @@ async function main() {
     `archive=${(statSync(archPath).size / 1048576).toFixed(1)}MiB smoke_sigterm=${smoke.sigterm_s}s`);
 }
 
-main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((e) => { console.error(e.message ?? e); process.exit(1); });

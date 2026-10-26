@@ -1,10 +1,6 @@
 # Documentation index
 
-Engine, incident lifecycle, notification delivery, analytics và advanced
-admin/RBAC đã triển khai kèm contract/integration tests; local acceptance
-(harness `scripts/accept-local.mjs`) và container release gate local đã PASS
-tại các receipt trong `docs/releases/`. Chưa có public deployment để kiểm
-chứng — hosted gates vẫn NOT_RUN/BLOCKED theo `docs/releases/v0.1.0-evidence.md`.
+Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, vận hành, bảo mật, kiểm thử và phát hành. Trang release chỉ ghi nhận trạng thái phân phối sau khi các registry được kiểm chứng.
 
 ## Public docs
 
@@ -12,7 +8,7 @@ chứng — hosted gates vẫn NOT_RUN/BLOCKED theo `docs/releases/v0.1.0-eviden
   đạt parity với `tools/openapi/check-openapi.mjs`; operations tagged
   `planned`/`x-future` là contract drafts, chưa tồn tại ở runtime.
 - [Product requirements và scope traceability](product-requirements.md):
-  Must/non-goals, R01–R24 map tới phase/gate, 15 deliverables.
+  Must/non-goals và các yêu cầu R01–R24.
 - [Toolchain pins và compatibility](toolchain.md): pinned versions, local
   drift, prerequisites Windows/Linux.
 - [Runbook: local và test databases](runbooks/local-database.md):
@@ -24,7 +20,7 @@ chứng — hosted gates vẫn NOT_RUN/BLOCKED theo `docs/releases/v0.1.0-eviden
 - [Runbook: local operations](runbooks/local-operations.md): health
   semantics, bounded metrics catalog, freshness interpretation.
 - [Testing và verification](testing.md): local gate commands, check
-  semantics, CI honesty.
+  semantics, CI boundaries và links tới [capacity protocol](testing/capacity.md).
 - [Admin security race matrix](testing/admin-security.md): the
   privileged-recipe linearization order và its concurrency proofs.
 - [Engine lifecycle](engine-lifecycle.md): ownership/epochs, durable
@@ -34,10 +30,23 @@ chứng — hosted gates vẫn NOT_RUN/BLOCKED theo `docs/releases/v0.1.0-eviden
   partition, raw+hourly merge, represented-window contract.
 - [Database design](architecture/database.md): ERD, table inventory và
   schema-level invariants của schema `uptime` (dẫn từ `migrations/`).
+- [Container release policy](releases/container-policy.md): image identity,
+  publication prerequisites, digest and privacy requirements.
+- [Release evidence](releases/v0.1.0-evidence.md): public registry record;
+  no local receipts or private planning material.
 
-## Private planning material
+## Cấu trúc thư mục tài liệu
 
-Bộ plan chi tiết (11 phases/93 commits), research, review evidence và
-execution ledgers sống trong thư mục planning local của workspace; chúng là
-private working material, không được link/publish từ public docs. Các thư mục
-API/runbooks/media tiếp theo sẽ được tạo cùng commit triển khai liên quan.
+| Thư mục | Nội dung |
+|---|---|
+| `api/` | OpenAPI contract |
+| `architecture/` | Database và thống kê |
+| `deployment/` | Candidate deployment guides and budgets |
+| `design/` | UI decisions, inventories, and design handoff |
+| `media/` | Product screenshots and demo assets |
+| `releases/` | Container policy and public release records |
+| `runbooks/` | Local operations, database, notification, retention, and recovery |
+| `security/` | SSRF and role authorization boundaries |
+| `testing/` | Local acceptance, browser, capacity, and admin security checks |
+
+The root of `docs/` also contains the toolchain guide, product requirements, and engine lifecycle documentation.

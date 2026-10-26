@@ -7,31 +7,36 @@
 
 A personal Go backend engineering project built around secure uptime checks, incident alerting, advanced administration, and a polished React dashboard.
 
-**Status: local acceptance complete; external distribution pending.** The full product runs locally against the composed harness with evidence-backed gates. Container publication and hosted deployment are blocked on owner-side prerequisites (license choice, registry accounts/credentials, publication authority).
+Release requirements and verified distribution records are maintained separately in the release documentation linked below.
 
 ## Start here
 
-- [Product requirements and scope traceability](docs/product-requirements.md): Must/non-goal scope, R01–R24 to phase and gate mapping.
+- [Product requirements and scope](docs/product-requirements.md): user-facing requirements and non-goals.
 - [Documentation index](docs/README.md): toolchain, runbooks, testing and operations docs.
 - [Toolchain pins](docs/toolchain.md) and the [local database runbook](docs/runbooks/local-database.md).
+- [Container release policy](docs/releases/container-policy.md) and [release evidence](docs/releases/v0.1.0-evidence.md).
 
-A private, detailed implementation roadmap (11 phases, 93 focused commits)
-lives in this workspace's local planning directory and is intentionally not
-linked or published from public documentation.
+## Repository layout
 
-## Planned product
+| Path | Responsibility |
+|---|---|
+| `cmd/` | API application entry point |
+| `internal/` | Backend domains, services, persistence, and adapters |
+| `web/` | React and TypeScript dashboard |
+| `migrations/` | PostgreSQL schema migrations |
+| `docs/` | Product, API, architecture, testing, security, and operations documentation |
+| `scripts/` | Local checks, acceptance tooling, and release automation |
+| `tools/` | API contract and repository support tools |
+
+## Product overview
 
 Users manage public HTTP(S) monitors, inspect sampled availability and coverage, follow incidents, and receive verified Telegram notifications. Platform administrators have explicit permissions for accounts, sessions, quotas, operational health, roles and audit history.
 
 The backend uses Go, PostgreSQL, bounded scheduling/workers, connection-bound SSRF protection and transactional incident/outbox updates. The frontend uses React and TypeScript, with a Stitch design handoff, responsive User/Admin screens and accessible data views.
 
-Development and acceptance happen locally first. Container distribution to Docker Hub and GitHub Container Registry follows the local gate. Vercel, Render and a free PostgreSQL provider are the planned hosting targets, subject to current free-tier and runtime checks.
+Use the guides in [`docs/`](docs/README.md) for setup, testing, and operations. Container distribution requirements are defined in the release policy; registry identities are recorded only after verification.
 
 ## Screenshots and demo
-
-Captured from the real application running in the local deterministic
-harness (`compose.test.yaml`): synthetic demo accounts, an isolated
-fixture target, and the production-shaped UI — no mockups.
 
 - Dashboard, monitor detail, and the new-monitor editor:
   [desktop](docs/media/screenshots/dashboard-desktop.png) ·
@@ -48,15 +53,7 @@ fixture target, and the production-shaped UI — no mockups.
 - Recorded flows:
   [monitor incident → recovery](docs/media/monitor-incident-recovery.gif) ·
   [admin action → audit](docs/media/admin-role-and-audit.gif)
-  ([transcripts](docs/media/), [provenance manifest](docs/media/manifest.json))
 
-## Evidence and release
+## Release and license
 
-Runtime, CI, benchmark and local acceptance evidence exists under the
-verification harness; container publication and hosted deployment remain
-pending owner-side prerequisites (license, registry accounts/credentials,
-publication authority). No hosted or published result is claimed.
-
-The initial learning target is 12–16 weeks at 10–15 hours per week. The expanded full scope is estimated separately in the plan; advanced Admin and security are retained as required work.
-
-License and public release metadata will be selected by the repository owner at the release checkpoint.
+The project is licensed under [MIT](LICENSE). See the [container release policy](docs/releases/container-policy.md) for distribution requirements and the [release evidence page](docs/releases/v0.1.0-evidence.md) for verified registry identities. Hosted deployment guides cover [Render](docs/deployment/render.md), [Vercel](docs/deployment/vercel.md), and [Supabase](docs/deployment/supabase.md).

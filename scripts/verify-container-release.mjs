@@ -37,13 +37,17 @@ export function validateManifest(m, { stage = "local" } = {}) {
     `version '${m.version}' is not semver-shaped`);
   need(/^[0-9a-f]{40}$/.test(m.source_sha ?? ""),
     `source_sha missing/malformed: '${m.source_sha}'`);
+  need(DIGEST_RE.test(m.context_receipt_sha256 ?? ""),
+    "context_receipt_sha256 missing/malformed");
   need(m.platform === "linux/amd64",
     `platform '${m.platform}' — baseline contract is linux/amd64 only`);
-  need(m.license_status && typeof m.license_status === "string",
-    "license_status missing — public release requires a resolved license");
+  const resolvedLicense = /^resolved:([A-Za-z0-9.+-]+)$/.exec(m.license_status ?? "")?.[1];
+  need(typeof m.license_status === "string" &&
+    (m.license_status === "pending-user-decision" || resolvedLicense),
+    "license_status missing/malformed — expected resolved:<spdx> or pending-user-decision");
   if (stage === "remote")
-    need(/^resolved:/.test(m.license_status ?? ""),
-      `license_status '${m.license_status}' — remote publish requires resolved:<spdx>`);
+    need(!!resolvedLicense,
+      `license_status '${m.license_status}' — remote publish requires a nonempty resolved:<spdx>`);
 
   const img = m.image ?? {};
   need(typeof img.reference === "string" && img.reference.includes(":"),
@@ -69,6 +73,9 @@ export function validateManifest(m, { stage = "local" } = {}) {
     "revision label != source_sha");
   need(labels["org.opencontainers.image.version"] === m.version,
     "version label != manifest version");
+  if (resolvedLicense)
+    need(labels["org.opencontainers.image.licenses"] === resolvedLicense,
+      `license label '${labels["org.opencontainers.image.licenses"]}' != ${resolvedLicense}`);
 
   for (const k of ["sbom", "provenance"]) {
     const s = m[k] ?? {};
@@ -154,9 +161,7 @@ function run(argv, { quiet, buffer } = {}) {
 }
 
 async function main() {
-  const args = {};
-  for (let i = 2; i < process.argv.length; i += 2)
-    args[process.argv[i].replace(/^--/, "")] = process.argv[i + 1];
+  const args = parseArgs(process.argv.slice(2));
   const mpath = resolve(args.manifest ?? die2("--manifest required"));
   const output = resolve(args.output ?? die2("--output required"));
   const stage = args.stage ?? "local";
@@ -212,6 +217,11 @@ async function main() {
         if (imgM.config?.digest !== m.image.config_digest) problems.push("config digest mismatch");
         const cfgBytes = (await cat(`blobs/${m.image.config_digest.replace(":", "/")}`)).out;
         if (!hexOK(m.image.config_digest, Buffer.from(cfgBytes, "utf8"))) problems.push("config blob hash mismatch");
+        const config = JSON.parse(cfgBytes);
+        const sortedEntries = (value) => Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b));
+        if (JSON.stringify(sortedEntries(config.config?.Labels)) !==
+            JSON.stringify(sortedEntries(m.labels)))
+          problems.push("OCI config labels != manifest labels");
         const manifestLayers = (imgM.layers ?? []).map((l) => l.digest);
         if (JSON.stringify(manifestLayers) !== JSON.stringify(m.image.layer_digests))
           problems.push("recorded layer_digests != image manifest layers");
@@ -322,6 +332,24 @@ async function main() {
   writeFileSync(output, JSON.stringify(result, null, 2));
   console.log(`verdict ${result.verdict} — ${result.checks.map((c) => `${c.name}:${c.ok ? "ok" : "FAIL"}`).join(", ")}`);
   process.exit(result.verdict === "PASS" ? 0 : 1);
+}
+
+export function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i];
+    if (!flag.startsWith("--")) die2(`unexpected argument '${flag}'`);
+    const key = flag.slice(2);
+    if (key === "anonymous") {
+      const next = argv[i + 1];
+      args[key] = next === "true" || next === "false" ? argv[++i] : "true";
+      continue;
+    }
+    const value = argv[++i];
+    if (!value || value.startsWith("--")) die2(`--${key} requires a value`);
+    args[key] = value;
+  }
+  return args;
 }
 function die2(msg) { throw new Error(`verify-release: ${msg}`); }
 
