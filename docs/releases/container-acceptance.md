@@ -1,6 +1,6 @@
 # Container distribution acceptance gate
 
-Status: **MECHANISM COMPLETE / PUBLISHED — GHCR anonymous pull pending owner package visibility** (updated 2026-10-26)
+Status: **MECHANISM COMPLETE / PUBLISHED + ANONYMOUSLY VERIFIED ON BOTH REGISTRIES — GHCR repository association outstanding** (updated 2026-10-26)
 
 This document is the distribution-acceptance receipt for Phase 10. It
 records what is proven locally and exactly which checks remain blocked
@@ -46,9 +46,12 @@ API calls behind each:
   `DOCKERHUB_NAMESPACE` are repository variables and `DOCKERHUB_TOKEN` a
   repository secret.
 - **User authority**: external publication was explicitly authorized.
-- **Remaining owner action**: the new GHCR package was created private;
-  it must be set public and repository-linked in GitHub package
-  settings. Anonymous GHCR pull stays BLOCKED until then.
+- **Remaining gap**: the GHCR package is public and anonymous digest
+  pulls + ready-200 smokes pass on both registries, but the package→
+  repository association is still `null`. The image carries the
+  `org.opencontainers.image.source` label; GitHub package settings
+  showed no connect-repository control, so the link may need a
+  `GITHUB_TOKEN`-driven publish from the repository workflow.
 
 ## What remains after prerequisites
 
