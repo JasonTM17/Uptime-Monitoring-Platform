@@ -238,6 +238,12 @@ test("TestVerifyMinimizedContextProofHashAndIdentity", () => {
   assert.ok(validateContextProof(m, expanded).some((e) => /unsupported fields/.test(e)));
 });
 
+test("TestTarPathPortableForWindowsGnuTar", () => {
+  const source = readFileSync(SCRIPT, "utf8");
+  assert.match(source, /tarPath\(sourceRoot\)/);
+  assert.doesNotMatch(source, /"-C", sourceRoot\]/);
+});
+
 test("TestReplayBuildContextFromExactSourceCommit", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "uptime-context-source-test-"));
   try {

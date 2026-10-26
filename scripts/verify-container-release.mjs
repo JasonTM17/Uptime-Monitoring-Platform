@@ -26,6 +26,9 @@ const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const GOVULNCHECK_VERSION = "v1.1.4";
 const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replaceAll("\\", "/");
+// GNU tar (Git's tar on Windows) octal-decodes backslash escapes in args
+// like -C "D:\...\3abc"; forward slashes are portable across tar builds.
+const tarPath = (p) => p.replaceAll("\\", "/");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 export function validateManifest(m, { stage = "local" } = {}) {
@@ -222,7 +225,7 @@ export async function verifySourceContext(m, repoRoot = ROOT) {
     const sourceArchiveBytes = await run(["git", "archive", "--format=tar", m.source_sha],
       { quiet: true, buffer: true, cwd: repoRoot });
     step = "extract";
-    await run(["tar", "-xf", "-", "-C", sourceRoot],
+    await run(["tar", "-xf", "-", "-C", tarPath(sourceRoot)],
       { input: sourceArchiveBytes, quiet: true });
     step = "context-check";
     await run(["node", resolve(sourceRoot, "scripts/check-build-context.mjs"),
@@ -247,7 +250,9 @@ function run(argv, { quiet, buffer, cwd = ROOT, input } = {}) {
     let err = "";
     p.stdout.on("data", (d) => chunks.push(d));
     p.stderr.on("data", (d) => { err += d; if (!quiet) process.stderr.write(d); });
-    p.stdin.on("error", (e) => { if (e.code !== "EPIPE") rej(e); });
+    // EPIPE/EOF only mean the child closed stdin early; let close surface
+    // the real exit code and stderr instead of masking it as "write EOF".
+    p.stdin.on("error", (e) => { if (e.code !== "EPIPE" && e.code !== "EOF") rej(e); });
     p.stdin.end(input);
     p.on("close", (c) => {
       const buf = Buffer.concat(chunks);

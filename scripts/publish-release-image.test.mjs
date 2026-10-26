@@ -212,6 +212,12 @@ test("release builder rejects dirty inputs before creating a source-SHA image", 
     /release inputs must be committed at the recorded source SHA/);
 });
 
+test("builder hands tar a portable context path, not a backslash Windows path", () => {
+  assert.match(builder, /tarPath\(sourceRoot\)/);
+  assert.doesNotMatch(builder, /"-C", sourceRoot\]/);
+  assert.match(builder, /replaceAll\("\\\\", "\/"\)/);
+});
+
 test("release builder rechecks HEAD and context hash around mutable steps", () => {
   const snapshot = builder.match(
     /const verifyContextSnapshot = async \(name\) => \{([\s\S]*?)\n  \};/)?.[1] ?? "";

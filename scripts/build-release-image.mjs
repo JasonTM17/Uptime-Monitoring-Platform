@@ -97,7 +97,9 @@ function run(argv, { input, env, quiet, buffer } = {}) {
       else { const s = d.toString(); out += s; if (!quiet) process.stdout.write(s); }
     });
     p.stderr.on("data", (d) => { const s = d.toString(); err += s; if (!quiet) process.stderr.write(s); });
-    p.stdin.on("error", (e) => { if (e.code !== "EPIPE") rej(e); });
+    // EPIPE/EOF only mean the child closed stdin early; let close surface
+    // the real exit code and stderr instead of masking it as "write EOF".
+    p.stdin.on("error", (e) => { if (e.code !== "EPIPE" && e.code !== "EOF") rej(e); });
     p.stdin.end(input);
     p.on("close", (c) => c === 0 ? res({ out: buffer ? Buffer.concat(chunks) : out, err })
       : rej(new Error(`${argv.join(" ")} -> ${c}: ${err.split("\n").pop() || out.split("\n").pop()}`)));
@@ -107,6 +109,9 @@ function run(argv, { input, env, quiet, buffer } = {}) {
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replaceAll("\\", "/");
+// GNU tar (Git's tar on Windows) octal-decodes backslash escapes in args
+// like -C "D:\...\3abc"; forward slashes are portable across tar builds.
+const tarPath = (p) => p.replaceAll("\\", "/");
 
 async function main() {
   const args = {};
@@ -146,7 +151,7 @@ async function main() {
   const sourceArchiveBytes = (await run(["git", "archive", "--format=tar", sourceSha],
     { quiet: true, buffer: true })).out;
   writeFileSync(sourceArchive, sourceArchiveBytes);
-  await run(["tar", "-xf", "-", "-C", sourceRoot],
+  await run(["tar", "-xf", "-", "-C", tarPath(sourceRoot)],
     { input: sourceArchiveBytes, quiet: true });
 
   const licenseInfo = licenseStatus(sourceRoot);
