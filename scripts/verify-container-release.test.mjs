@@ -238,10 +238,11 @@ test("TestVerifyMinimizedContextProofHashAndIdentity", () => {
   assert.ok(validateContextProof(m, expanded).some((e) => /unsupported fields/.test(e)));
 });
 
-test("TestGhcrPackageReadbackIsNotListBound", () => {
+test("TestGhcrPackageReadbackIsOwnerScopedAndNotListBound", () => {
   const source = readFileSync(SCRIPT, "utf8");
   assert.doesNotMatch(source, /users\/JasonTM17\/packages\?package_type/);
-  assert.match(source, /user\/packages\/container\/uptime-monitoring-platform/);
+  assert.match(source, /users\/JasonTM17\/packages\/container\/uptime-monitoring-platform/);
+  assert.doesNotMatch(source, /["']user\/packages\/container\/uptime-monitoring-platform["']/);
 });
 
 test("TestTarPathPortableForWindowsGnuTar", () => {
