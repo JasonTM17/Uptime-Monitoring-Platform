@@ -366,16 +366,15 @@ async function main() {
     const ver = m.version;
     // --- GHCR: gh api package readback (authenticated, read-only) ---
     try {
-      const pkgs = JSON.parse(await run(["gh", "api",
-        "users/JasonTM17/packages?package_type=container&per_page=100"], { quiet: true }));
-      const pkg = pkgs.find((p) => p.name === "uptime-monitoring-platform");
-      if (!pkg) {
+      // Direct per-package readback — an unpaginated account package list
+      // silently misses the package on accounts with >100 packages.
+      const detail = JSON.parse(await run(["gh", "api",
+        "user/packages/container/uptime-monitoring-platform"], { quiet: true }).catch(() => "{}"));
+      if (!detail.name) {
         check("ghcr-package", false, "package ghcr.io/jasontm17/uptime-monitoring-platform not found — nothing published");
       } else {
-        const detail = JSON.parse(await run(["gh", "api",
-          `user/packages/container/${pkg.name}`], { quiet: true }).catch(() => "{}"));
-        const assoc = detail.repository?.full_name ?? pkg.repository?.full_name ?? null;
-        const vis = detail.visibility ?? pkg.visibility ?? "unknown";
+        const assoc = detail.repository?.full_name ?? null;
+        const vis = detail.visibility ?? "unknown";
         check("ghcr-package", true, `exists; visibility=${vis}`);
         check("ghcr-association", assoc === "JasonTM17/Uptime-Monitoring-Platform",
           `repository link: ${assoc}`);
