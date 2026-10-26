@@ -82,7 +82,7 @@ async function publishOne(m, registry, ref, { dryRun, authDir }) {
   for (const tag of receipt.tags) {
     await run(["docker", "run", "--rm", ...mounts, SKOPEO_IMAGE,
       "copy", "--all", "--dest-authfile", "/auth/auth.json",
-      `oci:/a/${archFile}`, `docker://${ref}:${tag}`], { quiet: true });
+      `oci-archive:/a/${archFile}:${tag}`, `docker://${ref}:${tag}`], { quiet: true });
     receipt.pushed.push(tag);
   }
   // Read back the remote index and hash the raw document — the digest

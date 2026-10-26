@@ -116,6 +116,11 @@ test("Docker Hub username is a variable and its token remains secret-only", () =
   assert.doesNotMatch(job, /--override-ref/);
 });
 
+test("publisher reads the OCI tar via the archive transport, not a layout directory", () => {
+  assert.match(publisher, /oci-archive:\/a\/\$\{archFile\}:\$\{tag\}/);
+  assert.doesNotMatch(publisher, /`oci:\/a\/\$\{archFile\}`/);
+});
+
 test("publisher jobs check out the exact workflow source before the artifact", () => {
   const jobs = [
     wf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "",
