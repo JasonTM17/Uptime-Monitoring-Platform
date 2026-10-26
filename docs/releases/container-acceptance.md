@@ -1,6 +1,6 @@
 # Container distribution acceptance gate
 
-Status: **MECHANISM COMPLETE / PUBLICATION BLOCKED** (2026-10-22)
+Status: **MECHANISM COMPLETE / PUBLISHED — GHCR anonymous pull pending owner package visibility** (updated 2026-10-26)
 
 This document is the distribution-acceptance receipt for Phase 10. It
 records what is proven locally and exactly which checks remain blocked
@@ -37,13 +37,18 @@ API calls behind each:
 4. `receipts-present` — no publication receipts; the the publication workflow trusted run
    has not executed.
 
-## Prerequisites still required before any publish
+## Prerequisites — resolved (2026-10-26)
 
-- **License**: owner must choose one (none declared in repo).
-- **Docker Hub**: account + `DOCKERHUB_USERNAME` (variable) +
-  `DOCKERHUB_TOKEN` (secret, repository-scoped PAT); no account found
-  under the GitHub username — namespace must come from the real account.
-- **User authority**: explicit go-ahead for external publication.
+- **License**: MIT is committed (`LICENSE`); release manifests report
+  `resolved:MIT` (see `container-policy.md`).
+- **Docker Hub**: owner-confirmed destination
+  `nguyenson1710/uptime-monitoring-platform`; `DOCKERHUB_USERNAME` and
+  `DOCKERHUB_NAMESPACE` are repository variables and `DOCKERHUB_TOKEN` a
+  repository secret.
+- **User authority**: external publication was explicitly authorized.
+- **Remaining owner action**: the new GHCR package was created private;
+  it must be set public and repository-linked in GitHub package
+  settings. Anonymous GHCR pull stays BLOCKED until then.
 
 ## What remains after prerequisites
 
