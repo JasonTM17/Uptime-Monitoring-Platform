@@ -8,17 +8,31 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs, validateManifest } from "./verify-container-release.mjs";
+import { parseArgs, validateContextProof, validateManifest,
+  validateScannerTargetArtifact, verifySourceContext } from "./verify-container-release.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = fileURLToPath(new URL("./verify-container-release.mjs", import.meta.url));
+const CONTEXT_CHECKER = resolve(ROOT, "scripts/check-build-context.mjs");
 
 const SHA = "a".repeat(64);
+const SOURCE_SHA = "b".repeat(40);
+const CONTEXT_HASH = `sha256:${SHA}`;
+const TARGET_BYTES = Buffer.from(`version=v0.1.0-rc.1 revision=${SOURCE_SHA}`);
+const TARGET_SHA = `sha256:${createHash("sha256").update(TARGET_BYTES).digest("hex")}`;
+const CONTEXT_PROOF_BYTES = Buffer.from(JSON.stringify({
+  format: "uptime-context-proof-v1",
+  source_sha: SOURCE_SHA,
+  build_context_sha256: CONTEXT_HASH,
+}, null, 2) + "\n");
+const CONTEXT_PROOF_SHA = `sha256:${createHash("sha256").update(CONTEXT_PROOF_BYTES).digest("hex")}`;
 const base = () => ({
   format: "uptime-release-manifest-v1",
   version: "v0.1.0-rc.1",
-  source_sha: "b".repeat(40),
+  source_sha: SOURCE_SHA,
   source_dirty: false,
+  build_context_sha256: CONTEXT_HASH,
+  context_receipt_sha256: CONTEXT_PROOF_SHA,
   built_at: "2026-10-22T00:00:00Z",
   platform: "linux/amd64",
   image: {
@@ -34,15 +48,34 @@ const base = () => ({
   base: { image: "gcr.io/distroless/static-debian12:nonroot", digest: `sha256:${SHA}` },
   labels: {
     "org.opencontainers.image.source": "https://github.com/JasonTM17/Uptime-Monitoring-Platform",
-    "org.opencontainers.image.revision": "b".repeat(40),
+    "org.opencontainers.image.revision": SOURCE_SHA,
     "org.opencontainers.image.version": "v0.1.0-rc.1",
     "org.opencontainers.image.licenses": "MIT",
   },
   license_status: "resolved:MIT",
   sbom: { format: "spdx-json", path: "sbom.spdx.json", subject_digest: `sha256:${SHA}` },
   provenance: { mode: "sidecar-json", path: "provenance.json", subject_digest: `sha256:${SHA}` },
-  scan: { image_scanner: { tool: "trivy", tool_version: "0.76.0",
-    db_timestamp: "2026-10-22", critical: 0, high: 0, findings: [], exceptions: [] } },
+  scan: {
+    image_scanner: { tool: "trivy", tool_version: "0.76.0",
+      db_timestamp: "2026-10-22", critical: 0, high: 0, findings: [], exceptions: [] },
+    source_scanner: {
+      tool: "govulncheck",
+      tool_version: "v1.1.4",
+      mode: "binary",
+      exit_code: 0,
+      target: {
+        kind: "source-matched-symbol-preserving-companion",
+        source_sha: SOURCE_SHA,
+        version: "v0.1.0-rc.1",
+        platform: "linux/amd64",
+        build_context_sha256: CONTEXT_HASH,
+        runtime_image_digest: `sha256:${SHA}`,
+        artifact: "govulncheck-target",
+        sha256: TARGET_SHA,
+      },
+      findings_tail: "No vulnerabilities found.",
+    },
+  },
   smoke: {
     ready_probe_200: true,
     live_db_free: true,
@@ -56,7 +89,7 @@ const base = () => ({
     build_script_sha256: `sha256:${SHA}`,
     tls_probe_sha256: `sha256:${SHA}`,
   },
-  context_receipt_sha256: `sha256:${SHA}`,
+  context_receipt_sha256: CONTEXT_PROOF_SHA,
   registries: { ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
     dockerhub: "jasontm17/uptime-monitoring-platform" },
   publishable: true,
@@ -125,6 +158,139 @@ test("TestRejectScanCountMismatch", () => {
     m.scan.image_scanner.findings = [{ cve: "CVE-2026-0005", severity: "HIGH" }];
   });
   assert.ok(errs.some((e) => /count .* != recorded findings/.test(e)), errs.join("|"));
+});
+
+test("TestRejectNonzeroGoVulncheckExit", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.exit_code = 3; });
+  assert.ok(errs.some((e) => /govulncheck.*exit_code.*0/.test(e)), errs.join("|"));
+});
+
+test("TestRejectUnpinnedGoVulncheckVersion", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.tool_version = "made-up-version"; });
+  assert.ok(errs.some((e) => /tool_version must be v1\.1\.4/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingGoVulncheckTargetDigest", () => {
+  const errs = rejects((m) => { delete m.scan.source_scanner.target.sha256; });
+  assert.ok(errs.some((e) => /govulncheck target.*sha256/.test(e)), errs.join("|"));
+});
+
+test("TestRejectGoVulncheckTargetSourceMismatch", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.target.source_sha = "c".repeat(40); });
+  assert.ok(errs.some((e) => /govulncheck target source_sha/.test(e)), errs.join("|"));
+});
+
+test("TestRejectGoVulncheckTargetImageMismatch", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.target.runtime_image_digest = `sha256:${"c".repeat(64)}`; });
+  assert.ok(errs.some((e) => /govulncheck target runtime_image_digest/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingGoVulncheckEvidence", () => {
+  const errs = rejects((m) => { delete m.scan.source_scanner; });
+  assert.ok(errs.some((e) => /source_scanner.tool must be govulncheck/.test(e)), errs.join("|"));
+});
+
+test("TestRejectDirtySourceSnapshot", () => {
+  const errs = rejects((m) => { m.source_dirty = true; });
+  assert.ok(errs.some((e) => /source_dirty must be false/.test(e)), errs.join("|"));
+});
+
+test("TestRejectMissingBuildContextDigest", () => {
+  const errs = rejects((m) => { delete m.build_context_sha256; });
+  assert.ok(errs.some((e) => /build_context_sha256 missing/.test(e)), errs.join("|"));
+});
+
+test("TestRejectGoVulncheckContextMismatch", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.target.build_context_sha256 = `sha256:${"c".repeat(64)}`; });
+  assert.ok(errs.some((e) => /govulncheck target build_context_sha256/.test(e)), errs.join("|"));
+});
+
+test("TestRejectUnsafeGoVulncheckArtifactPath", () => {
+  const errs = rejects((m) => { m.scan.source_scanner.target.artifact = "../outside"; });
+  assert.ok(errs.some((e) => /artifact must be the retained/.test(e)), errs.join("|"));
+});
+
+test("TestVerifyRetainedGoVulncheckTargetHashAndIdentity", () => {
+  const m = base();
+  assert.deepEqual(validateScannerTargetArtifact(m, TARGET_BYTES), []);
+  assert.deepEqual(validateScannerTargetArtifact(m, null), [
+    "govulncheck target artifact is missing",
+  ]);
+  assert.deepEqual(validateScannerTargetArtifact(m, Buffer.from("tampered")), [
+    "govulncheck target artifact sha256 mismatch",
+    "govulncheck target artifact does not embed source_sha",
+    "govulncheck target artifact does not embed version",
+  ]);
+});
+
+test("TestVerifyMinimizedContextProofHashAndIdentity", () => {
+  const m = base();
+  assert.deepEqual(validateContextProof(m, CONTEXT_PROOF_BYTES), []);
+  assert.ok(validateContextProof(m, Buffer.from("tampered")).some((e) =>
+    /context proof sha256 mismatch/.test(e)));
+  const wrongSource = Buffer.from(JSON.stringify({ format: "uptime-context-proof-v1",
+    source_sha: "c".repeat(40), build_context_sha256: CONTEXT_HASH }));
+  m.context_receipt_sha256 = `sha256:${createHash("sha256").update(wrongSource).digest("hex")}`;
+  assert.ok(validateContextProof(m, wrongSource).some((e) => /source_sha mismatch/.test(e)));
+  const expanded = Buffer.from(JSON.stringify({ format: "uptime-context-proof-v1",
+    source_sha: SOURCE_SHA, build_context_sha256: CONTEXT_HASH, extra: "metadata" }));
+  m.context_receipt_sha256 = `sha256:${createHash("sha256").update(expanded).digest("hex")}`;
+  assert.ok(validateContextProof(m, expanded).some((e) => /unsupported fields/.test(e)));
+});
+
+test("TestReplayBuildContextFromExactSourceCommit", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "uptime-context-source-test-"));
+  try {
+    const repo = join(tempRoot, "repo");
+    mkdirSync(join(repo, "scripts"), { recursive: true });
+    mkdirSync(join(repo, "cmd"), { recursive: true });
+    mkdirSync(join(repo, "internal"), { recursive: true });
+    writeFileSync(join(repo, "scripts/check-build-context.mjs"),
+      readFileSync(CONTEXT_CHECKER, "utf8"));
+    writeFileSync(join(repo, "Dockerfile"), "FROM scratch\n");
+    writeFileSync(join(repo, ".dockerignore"),
+      ".git/\nplans/\n.secrets/\nnode_modules/\n.env*\n");
+    writeFileSync(join(repo, "go.mod"), "module example.test/context\n");
+    writeFileSync(join(repo, "go.sum"), "");
+    writeFileSync(join(repo, "cmd/main.go"), "package main\n");
+    writeFileSync(join(repo, "internal/marker.go"), "package internal\n");
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo, encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["add", "--all"], { cwd: repo, encoding: "utf8" }).status, 0);
+    const commit = spawnSync("git", ["-c", "user.name=Context Test", "-c",
+      "user.email=context-test@example.invalid", "commit", "--quiet", "-m", "context fixture"],
+    { cwd: repo, encoding: "utf8" });
+    assert.equal(commit.status, 0, commit.stderr);
+    const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" });
+    assert.equal(revision.status, 0, revision.stderr);
+    const sourceSha = revision.stdout.trim();
+    const expectedSource = join(tempRoot, "expected-source");
+    const receipt = join(tempRoot, "context-manifest.json");
+    mkdirSync(expectedSource);
+    const archived = spawnSync("git", ["archive", "--format=tar", sourceSha],
+      { cwd: repo, maxBuffer: 64 * 1024 * 1024 });
+    assert.equal(archived.status, 0, archived.stderr);
+    // Pipe the archive through stdin like the verifier does — GNU tar reads
+    // a drive-letter "-f" path as host:file remote syntax.
+    const extracted = spawnSync("tar", ["-xf", "-", "-C", expectedSource],
+      { cwd: repo, input: archived.stdout, encoding: "utf8" });
+    assert.equal(extracted.status, 0, extracted.stderr);
+    const checked = spawnSync(process.execPath, [join(expectedSource, "scripts/check-build-context.mjs"),
+      "--context", expectedSource, "--dockerfile", "Dockerfile", "--verify-sentinels",
+      "--output", receipt], { cwd: repo, encoding: "utf8" });
+    assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`);
+    const manifest = JSON.parse(readFileSync(receipt, "utf8"));
+    assert.equal(await verifySourceContext({ source_sha: sourceSha,
+      build_context_sha256: `sha256:${manifest.contextHash}` }, repo), true);
+    assert.equal(await verifySourceContext({ source_sha: sourceSha,
+      build_context_sha256: `sha256:${"0".repeat(64)}` }, repo), false);
+  } finally {
+    const base = resolve(tmpdir());
+    const target = resolve(tempRoot);
+    const rel = relative(base, target);
+    assert.ok(rel && rel !== "." && !rel.startsWith("..") && !isAbsolute(rel),
+      "temporary context fixture must remain below the OS temp directory");
+    rmSync(target, { recursive: true, force: true });
+  }
 });
 
 test("TestRejectSecretBuildArg", () => {
@@ -250,6 +416,7 @@ test("rejects OCI config labels that disagree with the manifest", () => {
     m.image.layer_digests = [layerDigest];
     m.image.archive = archiveRelative;
     m.image.archive_sha256 = `sha256:${hash(readFileSync(archive))}`;
+    m.scan.source_scanner.target.runtime_image_digest = listDigest;
     m.sbom.subject_digest = listDigest;
     m.provenance.subject_digest = listDigest;
     writeFileSync(manifestPath, JSON.stringify(m));

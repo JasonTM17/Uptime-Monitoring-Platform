@@ -7,7 +7,7 @@ This document defines the gates and identities required for container distributi
 | Registry | Image reference | Publication contract |
 | --- | --- | --- |
 | GHCR | `ghcr.io/jasontm17/uptime-monitoring-platform` | Publish with job-scoped `packages: write`; verify package visibility and source association after publication. |
-| Docker Hub | `<owner>/uptime-monitoring-platform` | The owner must confirm the exact destination and configure `DOCKERHUB_USERNAME` and `DOCKERHUB_NAMESPACE` as repository variables plus `DOCKERHUB_TOKEN` as a repository secret. Never infer a destination from the GitHub account or a public profile. |
+| Docker Hub | `nguyenson1710/uptime-monitoring-platform` | Owner-confirmed destination. Configure `DOCKERHUB_USERNAME` and `DOCKERHUB_NAMESPACE` (`nguyenson1710/uptime-monitoring-platform`) as repository variables plus `DOCKERHUB_TOKEN` as a repository secret. Never infer a destination from the GitHub account or a public profile. |
 
 GitHub Packages source association uses the OCI
 `org.opencontainers.image.source` label → `JasonTM17/Uptime-Monitoring-Platform`.
@@ -43,11 +43,26 @@ paths, usernames, or credentials in labels/args/history.
    before any builder receives the context — receipt binds source +
    Dockerfile + filter + context hashes.
 3. One-build artifact: `scripts/build-release-image.mjs` → OCI archive +
-   manifest (schema in §7).
+   manifest (schema in §7). The builder rejects dirty release inputs and
+   archives the recorded Git commit once; the image build and Go scanner
+   consume the same captured archive bytes. Migrations use the extracted
+   snapshot, whose context hash is rechecked before and after migration; smoke
+   probe compilation also consumes the captured archive bytes.
+   The verifier replays the committed source through the context gate and
+   compares it with a minimized `context-proof.json` containing only source
+   SHA and context hash; the raw file inventory stays local.
 4. SBOM + BuildKit provenance (`mode=max` capability-permitting), same
    subject digest; vulnerability scan with pinned tool + recorded DB
    timestamp. High/critical findings are waived only via recorded
    exception (CVE + impact + owner + expiry) — never silently.
+   Go reachability uses pinned `govulncheck v1.1.4` binary mode on a
+   symbol-preserving companion built from the same source SHA, version, and
+   platform as the stripped runtime image. The release artifact retains the
+   companion binary. Local and remote verification recompute its SHA-256 and
+   confirm the embedded source SHA and version. The manifest binds that
+   digest to the runtime image and context hash; missing artifacts, a wrong
+   tool version, mismatched evidence, or nonzero scanner exit fails the gate.
+   Module-only advisory output remains visible in the scanner summary.
 5. Image smoke: non-root UID, read-only rootfs, all Linux capabilities
    dropped, `no-new-privileges`, and SIGTERM deadline. After migration,
    `/health/ready` must return 200. Then stop the disposable PostgreSQL
@@ -74,6 +89,10 @@ paths, usernames, or credentials in labels/args/history.
   `DOCKERHUB_USERNAME` and full-image-reference `DOCKERHUB_NAMESPACE`
   variables. No repository `GHCR_USER` or `GHCR_TOKEN` secret is needed.
 - Actions pinned by full commit SHA (mutable major tags are not pins).
+- The `release-artifact` allowlist contains only the manifest, OCI archive,
+  SBOM, provenance, retained `govulncheck-target`, and minimized
+  `context-proof.json`; it excludes the raw context inventory and local
+  verifier/build receipts.
 - `concurrency` serializes per image+release; in-flight publishes are
   not cancelled mid-write.
 - Partial failure: `PARTIAL` is recorded, retry reuses the same digest —
@@ -106,6 +125,7 @@ wrapper and consumed by the verifier and publisher:
   "version": "v0.1.0-rc.1",
   "source_sha": "<full git SHA>",
   "source_dirty": false,
+  "build_context_sha256": "sha256:…",
   "built_at": "<UTC ISO>",
   "platform": "linux/amd64",
   "image": {
@@ -137,8 +157,14 @@ wrapper and consumed by the verifier and publisher:
   "scan": {"image_scanner": {"tool": "…", "tool_version": "…",
            "db_timestamp": "…", "critical": 0, "high": 0,
            "findings": [], "exceptions": []},
-           "source_scanner": {"tool": "govulncheck", "mode": "binary",
-             "exit_code": 0, "findings_tail": "<scanner summary>"}},
+            "source_scanner": {"tool": "govulncheck", "tool_version": "v1.1.4",
+              "mode": "binary", "exit_code": 0,
+             "target": {"kind": "source-matched-symbol-preserving-companion",
+               "source_sha": "…", "version": "…", "platform": "linux/amd64",
+               "build_context_sha256": "sha256:…",
+                "runtime_image_digest": "sha256:…", "artifact": "govulncheck-target",
+                "sha256": "sha256:…"},
+             "findings_tail": "<scanner summary>"}},
   "smoke": {"ready_probe_200": true, "live_db_free": true,
             "ca_chain_outbound": true, "migrated_db": true,
             "nonroot_user": "65532:65532", "read_only_rootfs": true,
@@ -146,7 +172,7 @@ wrapper and consumed by the verifier and publisher:
             "sigterm_stop_s": 0.5,
             "build_script_sha256": "sha256:…",
             "tls_probe_sha256": "sha256:…"},
-  "context_receipt_sha256": "sha256:…",
+  "context_receipt_sha256": "sha256:<context-proof.json hash>",
   "registries": {
     "ghcr": "ghcr.io/jasontm17/uptime-monitoring-platform",
     "dockerhub": "pending-user-namespace"

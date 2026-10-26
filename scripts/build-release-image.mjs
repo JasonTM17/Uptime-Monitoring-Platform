@@ -16,15 +16,26 @@
 //     --output artifacts/release/image-manifest.json
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
 const TRIVY_IMAGE = "aquasec/trivy:0.76.0"; // pinned: released 2026-10-14, >7d
-const GOVULNCHECK = "golang.org/x/vuln/cmd/govulncheck@v1.1.4"; // pinned
+const GOVULNCHECK_VERSION = "v1.1.4";
+const GOVULNCHECK = `golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}`;
 const GO_IMAGE = "golang:1.27.3";
+const RELEASE_INPUT_PATHS = [
+  "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "LICENSE",
+  "go.mod", "go.sum", "cmd", "internal", "migrations",
+  ".github/workflows/container-release.yml", "docs/releases/container-policy.md",
+  "scripts/build-release-image.mjs", "scripts/check-build-context.mjs",
+  "scripts/check-build-context.test.mjs",
+  "scripts/release_smoke_probe.go", "scripts/verify-container-release.mjs",
+  "scripts/publish-release-image.mjs", "scripts/publish-release-image.test.mjs",
+  "scripts/verify-container-release.test.mjs",
+];
 
 function die(msg) { throw new Error(`build-release: ${msg}`); }
 
@@ -38,6 +49,20 @@ export function sanitizeGovulncheckFailure(error) {
       ? "tool error: govulncheck binary scan invocation failed"
       : `tool error: govulncheck binary scan exited ${exitCode}`,
   };
+}
+
+export function assertGovulncheckClean(exitCode, targetDigest, toolVersion) {
+  if (exitCode !== 0)
+    die(`govulncheck binary scan exited ${exitCode ?? "unknown"}`);
+  if (toolVersion !== GOVULNCHECK_VERSION)
+    die(`govulncheck version mismatch: expected ${GOVULNCHECK_VERSION}, got ${toolVersion ?? "unknown"}`);
+  if (!DIGEST_RE.test(targetDigest ?? ""))
+    die("govulncheck symbol-preserving target digest missing or malformed");
+}
+
+export function assertReleaseInputsClean(dirtyOutput) {
+  if (typeof dirtyOutput === "string" && dirtyOutput.trim())
+    die("release inputs must be committed at the recorded source SHA");
 }
 
 export function isArtifactPublishable(licenseInfo, dockerhubNs) {
@@ -59,18 +84,22 @@ function licenseStatus(root) {
   return "pending-user-decision";
 }
 
-function run(argv, { input, env, quiet } = {}) {
+function run(argv, { input, env, quiet, buffer } = {}) {
   return new Promise((res, rej) => {
     const p = spawn(argv[0], argv.slice(1), {
       cwd: ROOT, env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "", err = "";
-    p.stdout.on("data", (d) => { const s = d.toString(); out += s; if (!quiet) process.stdout.write(s); });
+    const chunks = [];
+    p.stdout.on("data", (d) => {
+      if (buffer) chunks.push(d);
+      else { const s = d.toString(); out += s; if (!quiet) process.stdout.write(s); }
+    });
     p.stderr.on("data", (d) => { const s = d.toString(); err += s; if (!quiet) process.stderr.write(s); });
-    if (input !== undefined) { p.stdin.write(input); }
-    p.stdin.end();
-    p.on("close", (c) => c === 0 ? res({ out, err })
+    p.stdin.on("error", (e) => { if (e.code !== "EPIPE") rej(e); });
+    p.stdin.end(input);
+    p.on("close", (c) => c === 0 ? res({ out: buffer ? Buffer.concat(chunks) : out, err })
       : rej(new Error(`${argv.join(" ")} -> ${c}: ${err.split("\n").pop() || out.split("\n").pop()}`)));
   });
 }
@@ -90,8 +119,6 @@ async function main() {
   // verify-container-release.mjs --stage remote refuses (R24 dual-registry).
   const dockerhubNs = args["dockerhub-namespace"] ?? process.env.DOCKERHUB_NAMESPACE
     ?? "pending-user-namespace";
-  const licenseInfo = licenseStatus(ROOT);
-  const licenseId = /^resolved:(.+)$/.exec(licenseInfo)?.[1];
   if (dockerhubNs !== "pending-user-namespace" &&
       !/^[a-z0-9_-]+\/[a-z0-9._-]{1,100}$/.test(dockerhubNs))
     die(`--dockerhub-namespace '${dockerhubNs}' is not <user>/<repo>`);
@@ -99,24 +126,57 @@ async function main() {
     die(`version '${version}' is not semver-shaped (v<semver>)`);
   mkdirSync(dirname(output), { recursive: true });
   const outDir = dirname(output);
+  if (readdirSync(outDir).length)
+    die("release output directory must be empty; use a fresh source-SHA-scoped directory");
 
-  // ---------- 0. source identity + context gate ----------
+  // ---------- 0. exact source snapshot + context gate ----------
   const sourceSha = (await run(["git", "rev-parse", "HEAD"], { quiet: true })).out.trim();
-  // Dirty = anything reaching the build context (deny-by-default:
-  // only go.mod/go.sum/cmd/internal + Dockerfile/.dockerignore).
-  const dirtyOut = (await run(["git", "status", "--porcelain",
-    "--", "go.mod", "go.sum", "cmd", "internal", "Dockerfile",
-    ".dockerignore", "Dockerfile.dockerignore"], { quiet: true })).out.trim();
+  const dirtyOut = (await run(["git", "status", "--porcelain", "--untracked-files=all",
+    "--", ...RELEASE_INPUT_PATHS], { quiet: true })).out.trim();
   const sourceDirty = dirtyOut.length > 0;
-  if (sourceDirty) console.log(`[build] WARNING: build-visible paths dirty:\n${dirtyOut}`);
+  assertReleaseInputsClean(dirtyOut);
 
+  const sourceArchive = resolve(outDir, "release-source.tar");
+  const sourceRoot = resolve(outDir, "release-source");
+  if (existsSync(sourceArchive) || existsSync(sourceRoot))
+    die("source snapshot output already exists; use a fresh SHA-scoped output directory");
+  mkdirSync(sourceRoot);
+  // Capture Git's tar stream once. Extraction, BuildKit, the scanner, and
+  // the smoke helper all consume these same immutable in-memory bytes.
+  const sourceArchiveBytes = (await run(["git", "archive", "--format=tar", sourceSha],
+    { quiet: true, buffer: true })).out;
+  writeFileSync(sourceArchive, sourceArchiveBytes);
+  await run(["tar", "-xf", "-", "-C", sourceRoot],
+    { input: sourceArchiveBytes, quiet: true });
+
+  const licenseInfo = licenseStatus(sourceRoot);
+  const licenseId = /^resolved:(.+)$/.exec(licenseInfo)?.[1];
   const ctxReceipt = resolve(outDir, "context-manifest.json");
-  mkdirSync(dirname(ctxReceipt), { recursive: true });
   console.log("[build] context privacy gate");
-  await run(["node", "scripts/check-build-context.mjs", "--context", ".",
-    "--dockerfile", "Dockerfile", "--verify-sentinels",
-    "--output", ctxReceipt]);
-  const ctxReceiptSha = `sha256:${sha256(readFileSync(ctxReceipt))}`;
+  const contextGate = resolve(sourceRoot, "scripts/check-build-context.mjs");
+  await run(["node", contextGate, "--context", sourceRoot,
+    "--dockerfile", "Dockerfile", "--verify-sentinels", "--output", ctxReceipt]);
+  const contextManifest = JSON.parse(readFileSync(ctxReceipt, "utf8"));
+  const buildContextSha = contextManifest.contextHash;
+  if (!/^[0-9a-f]{64}$/.test(buildContextSha ?? ""))
+    die("build-context receipt has no valid contextHash");
+  const contextProofPath = resolve(outDir, "context-proof.json");
+  const contextProof = { format: "uptime-context-proof-v1", source_sha: sourceSha,
+    build_context_sha256: `sha256:${buildContextSha}` };
+  writeFileSync(contextProofPath, JSON.stringify(contextProof, null, 2) + "\n");
+  const ctxReceiptSha = `sha256:${sha256(readFileSync(contextProofPath))}`;
+  const verifyContextSnapshot = async (name) => {
+    const head = (await run(["git", "rev-parse", "HEAD"], { quiet: true })).out.trim();
+    if (head !== sourceSha)
+      die(`source HEAD moved during release build (${name})`);
+    const snapshotPath = resolve(outDir, `context-snapshot-${name}.json`);
+    await run(["node", contextGate, "--context", sourceRoot,
+      "--dockerfile", "Dockerfile", "--verify-sentinels", "--output", snapshotPath],
+    { quiet: true });
+    const currentHash = JSON.parse(readFileSync(snapshotPath, "utf8")).contextHash;
+    if (currentHash !== buildContextSha)
+      die(`build context changed after the committed snapshot (${name})`);
+  };
 
   // ---------- 1. one build, two exports ----------
   // A single buildx invocation emits (a) the daemon image used by
@@ -139,7 +199,9 @@ async function main() {
     "--label", `org.opencontainers.image.url=${REPO_URL}`,
     ...(licenseId ? ["--label", `org.opencontainers.image.licenses=${licenseId}`] : []),
     "-t", ref, "-t", shaRef,
-    "-o", "type=docker", "-o", `type=oci,dest=${archPath}`, "."]);
+    "-o", "type=docker", "-o", `type=oci,dest=${archPath}`, "-"],
+  { input: sourceArchiveBytes });
+  await verifyContextSnapshot("after-image-build");
 
   // ---------- 2. identity readback (daemon + OCI chain) ----------
   const insp = JSON.parse((await run(["docker", "image", "inspect", ref],
@@ -200,34 +262,56 @@ async function main() {
     "-o", "/out/sbom.spdx.json", ref], { quiet: true });
 
   // ---------- 5. govulncheck (pinned, container lane) ----------
-  // govulncheck v1.1.4's x/tools SSA builder cannot parse this
-  // toolchain's AST (panic: unexpected expr: *ast.KeyValueExpr), so
-  // source mode is unusable. Binary mode analyzes the shipped artifact's
-  // embedded buildinfo + call graph — the honest target for a release
-  // gate anyway. Extract the binary straight out of the image.
-  console.log(`[build] govulncheck ${GOVULNCHECK} (binary mode)`);
-  const binPath = resolve(outDir, "uptime-api-bin");
-  let goFindings = "unparsed", goExit = null;
+  // The runtime binary is stripped with -s -w, which removes symbols the
+  // govulncheck binary analyzer needs for reachability. Build a companion
+  // from the same committed source/version/platform without stripping, then
+  // bind its digest and identity to this image in the release manifest.
+  // Source mode remains unavailable because the pinned analyzer's SSA parser
+  // panics on this toolchain's AST.
+  console.log(`[build] govulncheck ${GOVULNCHECK} (symbol-preserving binary mode)`);
+  let goFindings = "unparsed", goExit = null, goBinaryDigest = null, goToolVersion = null;
+  const scanTargetPath = resolve(outDir, "govulncheck-target");
   try {
-    const cid = (await run(["docker", "create", ref], { quiet: true })).out.trim();
-    await run(["docker", "cp", `${cid}:/usr/local/bin/uptime-api`, binPath], { quiet: true });
-    await run(["docker", "rm", cid], { quiet: true });
-    const gv = await run(["docker", "run", "--rm",
-      "-v", `${ROOT}:/src:ro`, "-w", "/src", GO_IMAGE, "sh", "-c",
-      `go install ${GOVULNCHECK} >/dev/null 2>&1 && govulncheck -mode binary -format text '${rel(binPath)}' > /tmp/govc.txt 2>&1; ec=$?; echo EXIT:$ec; tail -15 /tmp/govc.txt; echo DEPS_OPENPGP:$(go list -deps ./cmd/api 2>/dev/null | grep -c openpgp)`],
-      { quiet: true });
+    await verifyContextSnapshot("before-source-scan");
+    const scanCmd = `mkdir -p /src && tar -xf - -C /src; extract_ec=$?; ` +
+      `if [ "$extract_ec" -ne 0 ]; then echo EXIT:$extract_ec; ` +
+      `echo 'tool error: committed source archive extraction failed'; else ` +
+      `cd /src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false ` +
+      `-ldflags="-X main.version=${version} -X main.revision=${sourceSha}" ` +
+      `-o /out/govulncheck-target ./cmd/api >/tmp/gobuild.txt 2>&1; build_ec=$?; ` +
+      `if [ "$build_ec" -ne 0 ]; then echo EXIT:$build_ec; ` +
+      `echo 'tool error: same-source scanner binary build failed'; tail -15 /tmp/gobuild.txt; else ` +
+      `go install ${GOVULNCHECK} >/tmp/govuln-install.txt 2>&1; install_ec=$?; ` +
+      `if [ "$install_ec" -ne 0 ]; then echo EXIT:$install_ec; ` +
+      `echo 'tool error: govulncheck installation failed'; tail -15 /tmp/govuln-install.txt; else ` +
+      `govulncheck -version >/tmp/govc-version.txt 2>&1; version_ec=$?; ` +
+      `if [ "$version_ec" -ne 0 ]; then echo EXIT:$version_ec; ` +
+      `echo 'tool error: govulncheck version check failed'; tail -5 /tmp/govc-version.txt; else ` +
+      `tool_version=$(grep -Eo 'v[0-9]+\\.[0-9]+\\.[0-9]+' /tmp/govc-version.txt | head -1); ` +
+      `echo GOVULNCHECK_VERSION:$tool_version; ` +
+      `if [ "$tool_version" != "${GOVULNCHECK_VERSION}" ]; then echo EXIT:90; ` +
+      `echo 'tool error: govulncheck version does not match the pinned release'; else ` +
+      `govulncheck -mode binary -format text /out/govulncheck-target >/tmp/govc.txt 2>&1; ec=$?; ` +
+      `echo EXIT:$ec; tail -15 /tmp/govc.txt; fi; fi; fi; fi; fi`;
+    const gv = await run(["docker", "run", "--rm", "-i",
+      "-v", `${outDir}:/out`, "-w", "/", GO_IMAGE, "sh", "-c", scanCmd],
+      { input: sourceArchiveBytes, quiet: true });
     const lines = gv.out.trim().split("\n");
-    const exit = /^EXIT:(\d+)/.exec(lines[0])?.[1];
+    const exit = /^EXIT:(\d+)$/.exec(lines.find((line) => line.startsWith("EXIT:")) ?? "")?.[1];
     goExit = exit === undefined ? null : Number(exit);
-    const depCount = /DEPS_OPENPGP:(\d+)/.exec(lines[lines.length - 1])?.[1];
-    goFindings = lines.slice(1).join("\n").slice(-600) +
-      `\ncounter-evidence: cmd/api import closure contains ${depCount ?? "?"} openpgp packages` +
-      ` (go list -deps; strings-in-binary check corroborates when 0)`;
+    goToolVersion = lines.find((line) => line.startsWith("GOVULNCHECK_VERSION:"))
+      ?.slice("GOVULNCHECK_VERSION:".length).trim() || null;
+    if (existsSync(scanTargetPath))
+      goBinaryDigest = `sha256:${sha256(readFileSync(scanTargetPath))}`;
+    goFindings = lines.filter((line) => !line.startsWith("EXIT:") &&
+      !line.startsWith("GOVULNCHECK_VERSION:")).join("\n").slice(-600);
   } catch (e) {
     const failure = sanitizeGovulncheckFailure(e);
     goExit = failure.exitCode;
     goFindings = failure.findingsTail;
   }
+  assertGovulncheckClean(goExit, goBinaryDigest, goToolVersion);
+  await verifyContextSnapshot("after-source-scan");
 
   // ---------- 6. smoke: real migrated DB + runtime contract ----------
   // The API exits when the DB is unreachable at startup, so the smoke
@@ -239,13 +323,15 @@ async function main() {
   const net = `rel-smoke-net-${tag}`, pg = `rel-smoke-pg-${tag}`, app = `rel-smoke-app-${tag}`;
   const dsn = `postgres://smoke:smoke-dummy@${pg}:5432/smoke?sslmode=disable`;
   const probePath = resolve(outDir, "release-smoke-probe");
-  await run(["docker", "run", "--rm", "-e", "CGO_ENABLED=0", "-e", "GOOS=linux", "-e", "GOARCH=amd64",
-    "-v", `${ROOT}:/src:ro`, "-v", `${outDir}:/out`, "-w", "/src", GO_IMAGE,
-    "go", "build", "-trimpath", "-buildvcs=false", "-o", "/out/release-smoke-probe",
-    "./scripts/release_smoke_probe.go"], { quiet: true });
+  const smokeBuildCmd = "mkdir -p /src && tar -xf - -C /src && cd /src && " +
+    "go build -trimpath -buildvcs=false -o /out/release-smoke-probe ./scripts/release_smoke_probe.go";
+  await run(["docker", "run", "--rm", "-i", "-e", "CGO_ENABLED=0", "-e", "GOOS=linux", "-e", "GOARCH=amd64",
+    "-v", `${outDir}:/out`, "-w", "/", GO_IMAGE, "sh", "-c", smokeBuildCmd],
+  { input: sourceArchiveBytes, quiet: true });
   const tlsProbeSha = `sha256:${createHash("sha256").update(readFileSync(probePath)).digest("hex")}`;
-  const buildScriptSha = `sha256:${createHash("sha256").update(
-    readFileSync(fileURLToPath(import.meta.url))).digest("hex")}`;
+  const committedBuildScript = (await run(["git", "show",
+    `${sourceSha}:scripts/build-release-image.mjs`], { quiet: true })).out;
+  const buildScriptSha = `sha256:${sha256(Buffer.from(committedBuildScript, "utf8"))}`;
   const smoke = { ready200: false, liveDbFree: false, caChainOutbound: false,
     migratedDb: false, readOnlyRootfs: false, capabilitiesDropped: false,
     noNewPrivileges: false, sigterm_s: null };
@@ -261,11 +347,13 @@ async function main() {
       if (ok) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
+    await verifyContextSnapshot("before-migrations");
     await run(["docker", "run", "--rm", "--network", net,
-      "-v", `${resolve(ROOT, "migrations")}:/migrations:ro`,
+      "-v", `${resolve(sourceRoot, "migrations")}:/migrations:ro`,
       "migrate/migrate:v4.20.1",
       "-path", "/migrations", "-database", dsn, "up"], { quiet: true });
     smoke.migratedDb = true;
+    await verifyContextSnapshot("after-migrations");
     await run(["docker", "run", "-d", "--rm", "--name", app, "--network", net,
       "-p", "127.0.0.1:18099:8080",
       "--read-only", "--tmpfs", "/tmp:size=8m,uid=65532,gid=65532",
@@ -349,6 +437,7 @@ async function main() {
     format: "uptime-release-manifest-v1",
     version, source_sha: sourceSha, source_dirty: sourceDirty,
     built_at: created, platform: "linux/amd64",
+    build_context_sha256: `sha256:${buildContextSha}`,
     image: {
       reference: ref,
       index_digest: listDigest,
@@ -382,9 +471,14 @@ async function main() {
           severity: v.Severity, package: v.PkgName,
           installed_version: v.InstalledVersion, fixed_version: v.FixedVersion ?? null })),
         exceptions: [] },
-      source_scanner: { tool: "govulncheck", tool_version: "v1.1.4",
+      source_scanner: { tool: "govulncheck", tool_version: goToolVersion,
         mode: "binary", exit_code: goExit,
-        limitation: "source mode unusable — x/tools SSA panics on this toolchain's AST (govulncheck v1.1.4 / x/tools v0.29.0); binary mode scans the shipped artifact's buildinfo instead",
+        target: { kind: "source-matched-symbol-preserving-companion",
+          source_sha: sourceSha, version, platform: "linux/amd64",
+          build_context_sha256: `sha256:${buildContextSha}`,
+          runtime_image_digest: subject, artifact: "govulncheck-target",
+          sha256: goBinaryDigest },
+        limitation: "source mode unavailable because x/tools SSA panics on this toolchain's AST; binary mode scans a same-source/version/platform companion with Go symbols preserved, while the runtime image remains stripped",
         findings_tail: goFindings },
     },
     smoke: {

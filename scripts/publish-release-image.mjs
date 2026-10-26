@@ -10,8 +10,9 @@
 // Credentials ride an authfile mount, never process args or logs.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { validateManifest } from "./verify-container-release.mjs";
 
@@ -46,6 +47,28 @@ function run(argv, { quiet, env } = {}) {
     p.stderr.on("data", (d) => { err += d; if (!quiet) process.stderr.write(d); });
     p.on("close", (c) => c === 0 ? res(out) : rej(new Error(`${argv.join(" ")} -> ${c}: ${err.split("\n").pop()}`)));
   });
+}
+
+export async function verifyReleaseArtifactBeforePublish(manifestPath, runVerifier = run) {
+  const tempRoot = mkdtempSync(join(tmpdir(), "uptime-publish-verify-"));
+  const reportPath = join(tempRoot, "verification.json");
+  try {
+    await runVerifier([process.execPath, resolve(ROOT, "scripts/verify-container-release.mjs"),
+      "--manifest", resolve(manifestPath), "--output", reportPath, "--stage", "local"],
+    { quiet: true });
+    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    if (report.verdict !== "PASS") throw new Error("local verifier did not pass");
+  } catch (error) {
+    const code = / -> (\d+)(?::|$)/.exec(error?.message ?? "")?.[1];
+    throw new Error(`release artifact failed pre-publish verification${code ? ` (exit ${code})` : ""}`);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+export async function publishAfterArtifactVerification(manifestPath, publish, verify = verifyReleaseArtifactBeforePublish) {
+  await verify(manifestPath);
+  return publish();
 }
 
 async function publishOne(m, registry, ref, { dryRun, authDir }) {
@@ -88,37 +111,40 @@ async function main() {
   if (errs.length) { writeFileSync(output, JSON.stringify({ verdict: "FAIL", blocked: errs }, null, 2));
     console.error(`manifest fails remote contract: ${errs.join(" | ")}`); process.exit(1); }
 
-  const dests = dest === "all" ? Object.keys(REGISTRIES) : [dest];
-  const receipts = [];
-  for (const d of dests) {
-    const spec = REGISTRIES[d];
-    const ref = args["override-ref"] ?? m.registries?.[d];
-    if (!ref || ref === "pending-user-namespace") {
-      receipts.push({ registry: d, reference: ref ?? null, verified: false,
-        dry_run: false, error: "namespace unresolved", utc: new Date().toISOString() });
-      continue;
+  const receipts = await publishAfterArtifactVerification(mpath, async () => {
+    const dests = dest === "all" ? Object.keys(REGISTRIES) : [dest];
+    const result = [];
+    for (const d of dests) {
+      const spec = REGISTRIES[d];
+      const ref = args["override-ref"] ?? m.registries?.[d];
+      if (!ref || ref === "pending-user-namespace") {
+        result.push({ registry: d, reference: ref ?? null, verified: false,
+          dry_run: false, error: "namespace unresolved", utc: new Date().toISOString() });
+        continue;
+      }
+      const user = process.env[spec.user_env], tok = process.env[spec.tok_env];
+      if ((!user || !tok) && !dryRun) {
+        result.push({ registry: d, reference: ref, verified: false, dry_run: false,
+          error: `missing ${spec.user_env}/${spec.tok_env} — no mutation attempted`,
+          utc: new Date().toISOString() });
+        continue;
+      }
+      const authDir = resolve(dirname(output), `.auth-${d}`);
+      mkdirSync(authDir, { recursive: true });
+      try {
+        if (!dryRun)
+          writeFileSync(resolve(authDir, "auth.json"), JSON.stringify({ auths: {
+            [spec.host]: { auth: Buffer.from(`${user}:${tok}`).toString("base64") } } }));
+        result.push(await publishOne(m, d, ref, { dryRun, authDir }));
+      } catch (e) {
+        result.push({ registry: d, reference: ref, verified: false, dry_run: !!dryRun,
+          error: e.message.slice(0, 300), utc: new Date().toISOString() });
+      } finally {
+        rmSync(authDir, { recursive: true, force: true }); // never persist creds
+      }
     }
-    const user = process.env[spec.user_env], tok = process.env[spec.tok_env];
-    if ((!user || !tok) && !dryRun) {
-      receipts.push({ registry: d, reference: ref, verified: false, dry_run: false,
-        error: `missing ${spec.user_env}/${spec.tok_env} — no mutation attempted`,
-        utc: new Date().toISOString() });
-      continue;
-    }
-    const authDir = resolve(dirname(output), `.auth-${d}`);
-    mkdirSync(authDir, { recursive: true });
-    try {
-      if (!dryRun)
-        writeFileSync(resolve(authDir, "auth.json"), JSON.stringify({ auths: {
-          [spec.host]: { auth: Buffer.from(`${user}:${tok}`).toString("base64") } } }));
-      receipts.push(await publishOne(m, d, ref, { dryRun, authDir }));
-    } catch (e) {
-      receipts.push({ registry: d, reference: ref, verified: false, dry_run: !!dryRun,
-        error: e.message.slice(0, 300), utc: new Date().toISOString() });
-    } finally {
-      rmSync(authDir, { recursive: true, force: true }); // never persist creds
-    }
-  }
+    return result;
+  });
 
   const result = { manifest: rel(mpath), subject_digest: m.image.index_digest,
     generated_at: new Date().toISOString(), receipts,

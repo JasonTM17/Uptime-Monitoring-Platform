@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync,
          statSync, existsSync, unlinkSync } from 'node:fs';
-import { join, relative, sep, posix } from 'node:path';
+import { join, relative, resolve, sep, posix } from 'node:path';
 import { argv, exit, cwd } from 'node:process';
 
 // --- args -----------------------------------------------------------------
@@ -34,7 +34,7 @@ for (let i = 2; i < argv.length; i++) {
       console.error(`unknown arg: ${argv[i]}`); exit(2);
   }
 }
-const contextDir = join(cwd(), args.context);
+const contextDir = resolve(cwd(), args.context);
 if (!existsSync(join(contextDir, args.dockerfile))) {
   console.error(`FAIL: ${args.dockerfile} not found under ${args.context}`);
   exit(1);

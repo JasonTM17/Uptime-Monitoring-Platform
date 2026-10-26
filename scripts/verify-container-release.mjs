@@ -15,15 +15,18 @@
 //   missing platform, corrupt archive.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GHCR_REF = "ghcr.io/jasontm17/uptime-monitoring-platform";
 const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const GOVULNCHECK_VERSION = "v1.1.4";
 const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replaceAll("\\", "/");
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 export function validateManifest(m, { stage = "local" } = {}) {
   const errs = [];
@@ -37,8 +40,11 @@ export function validateManifest(m, { stage = "local" } = {}) {
     `version '${m.version}' is not semver-shaped`);
   need(/^[0-9a-f]{40}$/.test(m.source_sha ?? ""),
     `source_sha missing/malformed: '${m.source_sha}'`);
+  need(m.source_dirty === false, "source_dirty must be false for an exact-source release");
   need(DIGEST_RE.test(m.context_receipt_sha256 ?? ""),
     "context_receipt_sha256 missing/malformed");
+  need(DIGEST_RE.test(m.build_context_sha256 ?? ""),
+    "build_context_sha256 missing/malformed");
   need(m.platform === "linux/amd64",
     `platform '${m.platform}' — baseline contract is linux/amd64 only`);
   const resolvedLicense = /^resolved:([A-Za-z0-9.+-]+)$/.exec(m.license_status ?? "")?.[1];
@@ -90,6 +96,33 @@ export function validateManifest(m, { stage = "local" } = {}) {
     errs.push(`sbom subject ${subj} != image digest ${imgDigest}`);
 
   const scan = m.scan?.image_scanner ?? {};
+  const sourceScan = m.scan?.source_scanner ?? {};
+  need(sourceScan.tool === "govulncheck", "source_scanner.tool must be govulncheck");
+  need(sourceScan.tool_version === GOVULNCHECK_VERSION,
+    `source_scanner.tool_version must be ${GOVULNCHECK_VERSION}`);
+  need(sourceScan.mode === "binary", "source_scanner.mode must be binary");
+  need(sourceScan.exit_code === 0,
+    `govulncheck exit_code must be 0, got ${sourceScan.exit_code ?? "missing"}`);
+  const scanTarget = sourceScan.target ?? {};
+  need(scanTarget.kind === "source-matched-symbol-preserving-companion",
+    "govulncheck target kind must be source-matched-symbol-preserving-companion");
+  need(scanTarget.source_sha === m.source_sha,
+    "govulncheck target source_sha != manifest source_sha");
+  need(scanTarget.version === m.version,
+    "govulncheck target version != manifest version");
+  need(scanTarget.platform === m.platform,
+    "govulncheck target platform != manifest platform");
+  need(scanTarget.build_context_sha256 === m.build_context_sha256,
+    "govulncheck target build_context_sha256 != manifest build_context_sha256");
+  need(scanTarget.runtime_image_digest === img.index_digest,
+    "govulncheck target runtime_image_digest != image index_digest");
+  need(DIGEST_RE.test(scanTarget.sha256 ?? ""),
+    "govulncheck target sha256 missing/malformed");
+  need(scanTarget.artifact === "govulncheck-target",
+    "govulncheck target artifact must be the retained govulncheck-target file");
+  need(typeof sourceScan.findings_tail === "string" && !!sourceScan.findings_tail.trim(),
+    "source_scanner.findings_tail missing");
+
   const findings = scan.findings;
   need(Array.isArray(findings), "image_scanner.findings must record scanned vulnerability identities");
   if (Array.isArray(findings)) {
@@ -145,13 +178,77 @@ export function validateManifest(m, { stage = "local" } = {}) {
   return errs;
 }
 
-function run(argv, { quiet, buffer } = {}) {
+export function validateScannerTargetArtifact(m, bytes) {
+  const target = m?.scan?.source_scanner?.target ?? {};
+  const errs = [];
+  if (!Buffer.isBuffer(bytes)) return ["govulncheck target artifact is missing"];
+  if (`sha256:${sha256(bytes)}` !== target.sha256)
+    errs.push("govulncheck target artifact sha256 mismatch");
+  if (!bytes.includes(Buffer.from(m?.source_sha ?? "")))
+    errs.push("govulncheck target artifact does not embed source_sha");
+  if (!bytes.includes(Buffer.from(m?.version ?? "")))
+    errs.push("govulncheck target artifact does not embed version");
+  return errs;
+}
+
+export function validateContextProof(m, bytes) {
+  if (!Buffer.isBuffer(bytes)) return ["context proof artifact is missing"];
+  if (`sha256:${sha256(bytes)}` !== m?.context_receipt_sha256)
+    return ["context proof sha256 mismatch"];
+  let proof;
+  try { proof = JSON.parse(bytes.toString("utf8")); }
+  catch { return ["context proof is malformed"]; }
+  const errs = [];
+  const proofKeys = Object.keys(proof).sort();
+  if (JSON.stringify(proofKeys) !== JSON.stringify([
+    "build_context_sha256", "format", "source_sha",
+  ])) errs.push("context proof contains unsupported fields");
+  if (proof.format !== "uptime-context-proof-v1") errs.push("context proof format mismatch");
+  if (proof.source_sha !== m.source_sha) errs.push("context proof source_sha mismatch");
+  if (proof.build_context_sha256 !== m.build_context_sha256)
+    errs.push("context proof build_context_sha256 mismatch");
+  return errs;
+}
+
+export async function verifySourceContext(m, repoRoot = ROOT) {
+  const tempRoot = mkdtempSync(join(tmpdir(), "uptime-context-verify-"));
+  let step = "archive";
+  try {
+    const sourceRoot = join(tempRoot, "source");
+    const receipt = join(tempRoot, "context-manifest.json");
+    mkdirSync(sourceRoot);
+    // Replay one captured Git archive stream so extraction cannot observe a
+    // different temporary tar file than the recorded source SHA.
+    const sourceArchiveBytes = await run(["git", "archive", "--format=tar", m.source_sha],
+      { quiet: true, buffer: true, cwd: repoRoot });
+    step = "extract";
+    await run(["tar", "-xf", "-", "-C", sourceRoot],
+      { input: sourceArchiveBytes, quiet: true });
+    step = "context-check";
+    await run(["node", resolve(sourceRoot, "scripts/check-build-context.mjs"),
+      "--context", sourceRoot, "--dockerfile", "Dockerfile", "--verify-sentinels",
+      "--output", receipt], { quiet: true });
+    step = "receipt-read";
+    const context = JSON.parse(readFileSync(receipt, "utf8"));
+    return context.contextHash === m.build_context_sha256.replace(/^sha256:/, "");
+  } catch (e) {
+    const code = / -> (\d+)(?::|$)/.exec(e?.message ?? "")?.[1];
+    console.error(`source-context replay ${step} failed${code ? ` (exit ${code})` : ""}`);
+    return false;
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function run(argv, { quiet, buffer, cwd = ROOT, input } = {}) {
   return new Promise((res, rej) => {
-    const p = spawn(argv[0], argv.slice(1), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn(argv[0], argv.slice(1), { cwd, stdio: ["pipe", "pipe", "pipe"] });
     const chunks = [];
     let err = "";
     p.stdout.on("data", (d) => chunks.push(d));
     p.stderr.on("data", (d) => { err += d; if (!quiet) process.stderr.write(d); });
+    p.stdin.on("error", (e) => { if (e.code !== "EPIPE") rej(e); });
+    p.stdin.end(input);
     p.on("close", (c) => {
       const buf = Buffer.concat(chunks);
       c === 0 ? res(buffer ? buf : buf.toString("utf8"))
@@ -178,6 +275,24 @@ async function main() {
 
   const errs = validateManifest(m, { stage });
   check("manifest-contract", errs.length === 0, errs.join(" | ") || "schema/labels/digests/scan OK");
+
+  const targetArtifactPath = join(dirname(mpath), "govulncheck-target");
+  let targetArtifact = null;
+  try { if (existsSync(targetArtifactPath)) targetArtifact = readFileSync(targetArtifactPath); }
+  catch { targetArtifact = null; }
+  const targetErrs = validateScannerTargetArtifact(m, targetArtifact);
+  check("scanner-target-integrity", targetErrs.length === 0,
+    targetErrs.join(" | ") || "retained scanner binary hash and embedded identity match");
+
+  const contextProofPath = join(dirname(mpath), "context-proof.json");
+  let contextProofBytes = null;
+  try { if (existsSync(contextProofPath)) contextProofBytes = readFileSync(contextProofPath); }
+  catch { contextProofBytes = null; }
+  const proofErrs = validateContextProof(m, contextProofBytes);
+  const replayOK = proofErrs.length === 0 && await verifySourceContext(m);
+  check("source-context-binding", replayOK,
+    replayOK ? "minimized proof and source-SHA context replay match" :
+      (proofErrs.join(" | ") || "source-SHA context replay mismatch"));
 
   if (stage === "local") {
     // Archive on disk + recorded sha256 matches.

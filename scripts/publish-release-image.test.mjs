@@ -2,15 +2,18 @@
 // static analysis. Run: node --test scripts/publish-release-image.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { summarizeVerdict, planTags, REGISTRIES } from "./publish-release-image.mjs";
-import { isArtifactPublishable, sanitizeGovulncheckFailure } from "./build-release-image.mjs";
+import { summarizeVerdict, planTags, REGISTRIES, publishAfterArtifactVerification,
+  verifyReleaseArtifactBeforePublish } from "./publish-release-image.mjs";
+import { assertGovulncheckClean, assertReleaseInputsClean, isArtifactPublishable,
+  sanitizeGovulncheckFailure } from "./build-release-image.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const wf = readFileSync(resolve(ROOT, ".github/workflows/container-release.yml"), "utf8");
 const builder = readFileSync(resolve(ROOT, "scripts/build-release-image.mjs"), "utf8");
+const publisher = readFileSync(resolve(ROOT, "scripts/publish-release-image.mjs"), "utf8");
 
 const m = { version: "v0.1.0", source_sha: "a".repeat(40),
   image: { index_digest: `sha256:${"b".repeat(64)}` } };
@@ -113,6 +116,52 @@ test("Docker Hub username is a variable and its token remains secret-only", () =
   assert.doesNotMatch(job, /--override-ref/);
 });
 
+test("publisher jobs check out the exact workflow source before the artifact", () => {
+  const jobs = [
+    wf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "",
+    wf.match(/^  publish-dockerhub:[\s\S]*?(?=^  release-summary:)/m)?.[0] ?? "",
+  ];
+  for (const job of jobs) {
+    const checkout = job.indexOf("actions/checkout@");
+    const exactSha = job.indexOf("ref: ${{ github.sha }}");
+    const artifact = job.indexOf("actions/download-artifact@");
+    const publisher = job.indexOf("node scripts/publish-release-image.mjs");
+    assert.ok(checkout >= 0 && exactSha > checkout && artifact > exactSha,
+      "publisher must checkout github.sha before downloading the artifact");
+    assert.ok(publisher > artifact, "publisher CLI should run after artifact download");
+  }
+});
+
+test("publisher runs the local artifact verifier before any registry copy", () => {
+  const main = publisher.slice(publisher.indexOf("async function main()"));
+  const gate = main.indexOf("publishAfterArtifactVerification(mpath");
+  const copy = main.indexOf("publishOne(m, d, ref");
+  assert.ok(gate >= 0 && copy > gate, "local verifier must guard the registry-copy loop");
+  assert.match(publisher, /"--stage", "local"/);
+});
+
+test("failed artifact verification prevents the publisher operation from starting", async () => {
+  const events = [];
+  await assert.rejects(publishAfterArtifactVerification("image-manifest.json", async () => {
+    events.push("registry-copy");
+  }, async () => {
+    events.push("verification");
+    throw new Error("tampered artifact rejected");
+  }), /tampered artifact rejected/);
+  assert.deepEqual(events, ["verification"]);
+});
+
+test("pre-publish verifier requires a PASS receipt from local-stage validation", async () => {
+  let verifierArgs;
+  await assert.rejects(verifyReleaseArtifactBeforePublish("image-manifest.json", async (argv) => {
+    verifierArgs = argv;
+    const report = argv[argv.indexOf("--output") + 1];
+    writeFileSync(report, JSON.stringify({ verdict: "FAIL" }));
+  }), /failed pre-publish verification/);
+  assert.ok(verifierArgs.includes(resolve(ROOT, "scripts/verify-container-release.mjs")));
+  assert.deepEqual(verifierArgs.slice(-2), ["--stage", "local"]);
+});
+
 test("release artifact upload contains only the reviewed publication payload", () => {
   const paths = wf.match(/name: release-artifact\n\s+path:\s*\|?\s*\n([\s\S]*?)\n\s+if-no-files-found:/)?.[1]
     ?.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) ?? [];
@@ -121,12 +170,15 @@ test("release artifact upload contains only the reviewed publication payload", (
     "artifacts/release/uptime-platform-*.oci.tar",
     "artifacts/release/sbom.spdx.json",
     "artifacts/release/provenance.json",
+    "artifacts/release/govulncheck-target",
+    "artifacts/release/context-proof.json",
   ]);
+  assert.doesNotMatch(paths.join("\n"), /context-manifest\.json|release-source/);
   assert.doesNotMatch(wf, /name: release-artifact\n\s+path:\s*artifacts\/release\/?(?:\r?\n|$)/);
 });
 
 test("distributed manifest and provenance record only the context receipt hash", () => {
-  assert.match(builder, /const ctxReceiptSha = `sha256:\$\{sha256\(readFileSync\(ctxReceipt\)\)\}`/);
+  assert.match(builder, /const ctxReceiptSha = `sha256:\$\{sha256\(readFileSync\(contextProofPath\)\)\}`/);
   assert.equal((builder.match(/context_receipt_sha256: ctxReceiptSha/g) ?? []).length, 2);
   assert.doesNotMatch(builder, /context_receipt:\s*(?:ctxReceipt|rel\(ctxReceipt\))/);
 });
@@ -138,6 +190,34 @@ test("govulncheck failures retain exit status without exposing workspace paths",
     findingsTail: "tool error: govulncheck binary scan exited 1",
   });
   assert.doesNotMatch(JSON.stringify(failure), /D:\\|\/home\/|\/Users\//);
+});
+
+test("govulncheck gate requires a clean exit and a bound companion digest", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  assert.doesNotThrow(() => assertGovulncheckClean(0, digest, "v1.1.4"));
+  assert.throws(() => assertGovulncheckClean(3, digest, "v1.1.4"), /govulncheck binary scan exited 3/);
+  assert.throws(() => assertGovulncheckClean(0, "", "v1.1.4"), /symbol-preserving target digest/);
+  assert.throws(() => assertGovulncheckClean(0, digest, "v99.0.0"), /version mismatch/);
+});
+
+test("release build and scanners consume the captured Git archive bytes", () => {
+  assert.match(builder, /cd \/src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build/);
+  assert.match(builder, /docker", "run", "--rm", "-i"[\s\S]*input: sourceArchiveBytes, quiet: true/);
+  assert.equal((builder.match(/\{ input: sourceArchiveBytes(?:, quiet: true)? \}/g) ?? []).length, 4);
+});
+
+test("release builder rejects dirty inputs before creating a source-SHA image", () => {
+  assert.doesNotThrow(() => assertReleaseInputsClean(""));
+  assert.throws(() => assertReleaseInputsClean(" M cmd/api/main.go"),
+    /release inputs must be committed at the recorded source SHA/);
+});
+
+test("release builder rechecks HEAD and context hash around mutable steps", () => {
+  const snapshot = builder.match(
+    /const verifyContextSnapshot = async \(name\) => \{([\s\S]*?)\n  \};/)?.[1] ?? "";
+  assert.match(snapshot, /rev-parse", "HEAD"/);
+  assert.match(snapshot, /!== sourceSha/);
+  assert.match(snapshot, /contextHash/);
 });
 
 test("artifact publishability requires both resolved license and Docker Hub destination", () => {
