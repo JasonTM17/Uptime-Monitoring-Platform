@@ -2,12 +2,14 @@
 
 All notable changes to this project are documented here. Dates are UTC.
 
-## [0.1.0-rc.1] — 2026-10-22 — local release candidate
+## [0.1.0-rc.1] — 2026-10-26 — release candidate
 
-The first complete local candidate: the full product runs against the
-composed harness with evidence-backed gates. External distribution is
-**not** included — publication, hosted deployment, and license selection
-remain pending owner decisions.
+The first complete candidate: the full product runs against the composed
+harness with evidence-backed gates. The MIT license is committed. The
+container image is published to Docker Hub; GHCR publication is pushed
+but remains private pending a package-settings change. Hosted deployment
+is not included. Registry digests are recorded in
+`docs/releases/v0.1.0-evidence.md`.
 
 ### Implemented
 
