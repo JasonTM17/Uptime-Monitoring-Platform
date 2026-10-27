@@ -221,7 +221,7 @@ func RetryDeliveryChain(ctx context.Context, conn Beginner,
 			}
 			tag, err := tx.Exec(ctx, `
 				UPDATE uptime.notification_outbox
-				SET state='PENDING', attempts=0,
+				SET state='PENDING', attempts=0, rate_limit_refusals=0,
 				    next_attempt_at=clock_timestamp(),
 				    lease_token=NULL, lease_expires_at=NULL,
 				    last_error_code=NULL, version=version+1

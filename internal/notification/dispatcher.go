@@ -342,6 +342,13 @@ func (d *Dispatcher) process(ctx context.Context, cl Claim) error {
 	// stays: a permanently refusing limiter still terminates the row
 	// eventually rather than looping silently forever.
 	if d.limit != nil && !d.limit.Allow(cl.ChannelID) {
+		if d.clock.Now().Sub(cl.CreatedAt) > d.cfg.Retry.MaxAge {
+			if _, derr := d.deadFn(ctx, cl.ID, cl.LeaseToken,
+				"RETRY_EXHAUSTED"); derr != nil {
+				return fmt.Errorf("dead: %w", derr)
+			}
+			return nil
+		}
 		if _, rerr := d.reschedFn(ctx, cl.ID, cl.LeaseToken,
 			d.clock.Now().Add(d.cfg.Retry.MinDelay),
 			"RATE_LIMITED", d.cfg.Retry.MaxAttempts*8); rerr != nil {
@@ -368,10 +375,30 @@ func (d *Dispatcher) process(ctx context.Context, cl Claim) error {
 			return fmt.Errorf("dead: %w", derr)
 		}
 
+	case isRateLimit(err):
+		if d.clock.Now().Sub(cl.CreatedAt) > d.cfg.Retry.MaxAge {
+			if _, derr := d.deadFn(ctx, cl.ID, cl.LeaseToken,
+				"RETRY_EXHAUSTED"); derr != nil {
+				return fmt.Errorf("dead: %w", derr)
+			}
+			return nil
+		}
+		delay := ComputeRetry(1, del.RetryAfter, d.cfg.Retry, d.rng)
+		if _, rerr := d.reschedFn(ctx, cl.ID, cl.LeaseToken,
+			d.clock.Now().Add(delay), "RATE_LIMITED",
+			d.cfg.Retry.MaxAttempts*8); rerr != nil {
+			return fmt.Errorf("reschedule: %w", rerr)
+		}
+		return nil
+
 	default:
-		delay := ComputeRetry(cl.Attempts, del.RetryAfter,
+		attempts := cl.Attempts - cl.RateLimitRefusals
+		if attempts < 1 {
+			attempts = 1
+		}
+		delay := ComputeRetry(attempts, del.RetryAfter,
 			d.cfg.Retry, d.rng)
-		if Exhausted(cl.Attempts, cl.CreatedAt, d.clock.Now(),
+		if Exhausted(attempts, cl.CreatedAt, d.clock.Now(),
 			d.cfg.Retry) {
 			if _, derr := d.deadFn(ctx, cl.ID, cl.LeaseToken,
 				"RETRY_EXHAUSTED"); derr != nil {
@@ -391,6 +418,11 @@ func (d *Dispatcher) process(ctx context.Context, cl Claim) error {
 func isPermanent(err error) bool {
 	var se *SendError
 	return errors.As(err, &se) && se.Permanent
+}
+
+func isRateLimit(err error) bool {
+	var se *SendError
+	return errors.As(err, &se) && se.RateLimit
 }
 
 // renderText projects the safe payload into the message body — the

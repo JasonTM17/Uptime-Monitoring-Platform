@@ -61,6 +61,7 @@ type Delivery struct {
 type SendError struct {
 	Permanent bool  // true: never retry (bot blocked, bad chat/token)
 	Retryable bool  // true: retry inside the delivery budget
+	RateLimit bool  // true: external provider rate limit refusal
 	Cause     error // scrubbed — never contains the token or raw URL
 }
 
@@ -72,6 +73,9 @@ func permanentf(format string, a ...any) *SendError {
 }
 func retryablef(format string, a ...any) *SendError {
 	return &SendError{Retryable: true, Cause: fmt.Errorf(format, a...)}
+}
+func ratelimitf(format string, a ...any) *SendError {
+	return &SendError{Retryable: true, RateLimit: true, Cause: fmt.Errorf(format, a...)}
 }
 
 // Send delivers one message to one VERIFIED recipient destination.
@@ -136,7 +140,7 @@ func (s *TelegramSender) Send(ctx context.Context, botToken, chatID,
 	case resp.StatusCode == http.StatusTooManyRequests:
 		d := Delivery{RetryAfter: time.Duration(reply.Parameters.RetryAfter) *
 			time.Second}
-		return d, retryablef("telegram: rate limited (retry_after=%ds)",
+		return d, ratelimitf("telegram: rate limited (retry_after=%ds)",
 			reply.Parameters.RetryAfter)
 
 	case resp.StatusCode >= 500:

@@ -114,20 +114,91 @@ func TestOscillationReplay(t *testing.T) {
 }
 
 // Exclusions zero both streaks and never touch health - a DOWN
-// monitor stays DOWN, an UP monitor stays UP.
+// monitor stays DOWN, an UP monitor stays UP, an UNKNOWN monitor stays UNKNOWN.
 func TestExcludedResetsStreaks(t *testing.T) {
 	for _, ex := range []checker.Outcome{
 		checker.OutcomePolicyBlocked, checker.OutcomeCanceled,
 		checker.OutcomeInternalError,
 	} {
-		s := State{Health: HealthDown, FailureStreak: 2, SuccessStreak: 1}
-		got, tr := Reduce(s, obs(t, ex))
+		// DOWN monitor:
+		sDown := State{Health: HealthDown, FailureStreak: 2, SuccessStreak: 1}
+		got, tr := Reduce(sDown, obs(t, ex))
 		if got.Health != HealthDown || got.FailureStreak != 0 || got.SuccessStreak != 0 {
-			t.Fatalf("exclusion %v mutated state: %+v", ex, got)
+			t.Fatalf("exclusion %v mutated DOWN state: %+v", ex, got)
 		}
 		if tr.Effect != EffectNone {
-			t.Fatalf("exclusion %v emitted effect", ex)
+			t.Fatalf("exclusion %v emitted effect on DOWN", ex)
 		}
+
+		// UP monitor:
+		sUp := State{Health: HealthUp, FailureStreak: 2, SuccessStreak: 1}
+		gotUp, trUp := Reduce(sUp, obs(t, ex))
+		if gotUp.Health != HealthUp || gotUp.FailureStreak != 0 || gotUp.SuccessStreak != 0 {
+			t.Fatalf("exclusion %v mutated UP state: %+v", ex, gotUp)
+		}
+		if trUp.Effect != EffectNone {
+			t.Fatalf("exclusion %v emitted effect on UP", ex)
+		}
+
+		// UNKNOWN monitor:
+		sUnk := State{Health: HealthUnknown, FailureStreak: 2, SuccessStreak: 0}
+		gotUnk, trUnk := Reduce(sUnk, obs(t, ex))
+		if gotUnk.Health != HealthUnknown || gotUnk.FailureStreak != 0 || gotUnk.SuccessStreak != 0 {
+			t.Fatalf("exclusion %v mutated UNKNOWN state: %+v", ex, gotUnk)
+		}
+		if trUnk.Effect != EffectNone {
+			t.Fatalf("exclusion %v emitted effect on UNKNOWN", ex)
+		}
+	}
+}
+
+// TestExclusionInterruptsThresholdStreak proves that an excluded check
+// interrupts a failure streak so that 2 fails + 1 exclusion + 1 fail does NOT open an incident.
+func TestExclusionInterruptsThresholdStreak(t *testing.T) {
+	s := State{Health: HealthUp}
+	fail := checker.OutcomeConnectError
+	skip := checker.OutcomePolicyBlocked
+
+	s, tr := Reduce(s, obs(t, fail)) // fail 1
+	if s.FailureStreak != 1 || tr.Effect != EffectNone {
+		t.Fatalf("fail 1: %+v eff=%v", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, fail)) // fail 2
+	if s.FailureStreak != 2 || tr.Effect != EffectNone {
+		t.Fatalf("fail 2: %+v eff=%v", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, skip)) // exclusion resets failure streak
+	if s.FailureStreak != 0 || tr.Effect != EffectNone || s.Health != HealthUp {
+		t.Fatalf("skip: %+v eff=%v", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, fail)) // fail 1 of new streak
+	if s.FailureStreak != 1 || tr.Effect != EffectNone || s.Health != HealthUp {
+		t.Fatalf("fail after skip: %+v eff=%v (should not open incident)", s, tr.Effect)
+	}
+}
+
+// TestExclusionInterruptsRecoveryStreak proves that an excluded check
+// interrupts a recovery streak while DOWN so that 1 success + 1 exclusion + 1 success does NOT recover.
+func TestExclusionInterruptsRecoveryStreak(t *testing.T) {
+	s := State{Health: HealthDown}
+	ok := checker.OutcomeSuccess
+	skip := checker.OutcomePolicyBlocked
+
+	s, tr := Reduce(s, obs(t, ok)) // success 1
+	if s.SuccessStreak != 1 || tr.Effect != EffectNone || s.Health != HealthDown {
+		t.Fatalf("success 1: %+v eff=%v", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, skip)) // exclusion resets success streak
+	if s.SuccessStreak != 0 || tr.Effect != EffectNone || s.Health != HealthDown {
+		t.Fatalf("skip: %+v eff=%v", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, ok)) // success 1 of new streak
+	if s.SuccessStreak != 1 || tr.Effect != EffectNone || s.Health != HealthDown {
+		t.Fatalf("success after skip: %+v eff=%v (should not recover)", s, tr.Effect)
+	}
+	s, tr = Reduce(s, obs(t, ok)) // success 2 of new streak -> recovers
+	if s.SuccessStreak != 0 || tr.Effect != EffectRecovered || s.Health != HealthUp {
+		t.Fatalf("success 2 after skip: %+v eff=%v (should recover)", s, tr.Effect)
 	}
 }
 

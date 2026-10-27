@@ -1,6 +1,6 @@
 # Database design — `uptime` schema
 
-Source of truth: `migrations/001…007` (forward + down pairs). This page
+Source of truth: `migrations/001…008` (forward + down pairs). This page
 describes what the migrations actually create; it does not restate SQL.
 
 Schema: PostgreSQL, single schema `uptime`. Ownership isolation and
@@ -73,11 +73,11 @@ PRIMARY KEY`):
 |---|---|---|
 | `incidents` | one open incident per monitor | partial unique index on open incidents; anchored to the `check_runs` that opened/resolved it (composite FKs); `close_reason` distinguishes `RECOVERED` from lifecycle closures (`CONFIG_CHANGED`, `DELETED`) — config change is not a recovery |
 
-### Notification outbox (005)
+### Notification outbox (005, 008)
 
 | Table | Purpose | Notable invariants |
 |---|---|---|
-| `notification_outbox` | durable delivery intent | `event_key` unique; one logical event per `(incident, kind, channel)`; recovery rows chain to their DOWN predecessor via self-FK; `LEASED ⇔ lease_token+expiry` pair check; non-TEST events must reference an incident; `safe_payload` carries non-secret projections only (no tokens, chat IDs, or raw target URLs) |
+| `notification_outbox` | durable delivery intent | `event_key` unique; one logical event per `(incident, kind, channel)`; recovery rows chain to their DOWN predecessor via self-FK; `LEASED ⇔ lease_token+expiry` pair check; non-TEST events must reference an incident; `safe_payload` carries non-secret projections only (no tokens, chat IDs, or raw target URLs); `rate_limit_refusals` counts provider rate-limit refusals independently of transient delivery attempts (`CHECK(rate_limit_refusals >= 0 AND rate_limit_refusals <= attempts)`) |
 
 ### Analytics (006)
 

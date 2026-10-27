@@ -5,6 +5,7 @@ package notification
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +264,95 @@ func TestUnverifiedChannelRejected(t *testing.T) {
 	tx.Commit(ctx)
 	if len(intents) != 0 {
 		t.Fatalf("cross-owner intent created: %+v", intents)
+	}
+}
+
+// TestNotificationRateLimitRefusalsMigration008 verifies migration 008 up and down:
+// clean execution, conservative zero-backfill for existing records, and check constraint bounds.
+func TestNotificationRateLimitRefusalsMigration008(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+
+	// Ensure the table is restored to the migrated (up) state if the test fails midway:
+	t.Cleanup(func() {
+		_, _ = c.Exec(context.Background(), `
+			DO $$
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_schema='uptime' AND table_name='notification_outbox' AND column_name='rate_limit_refusals'
+				) THEN
+					ALTER TABLE uptime.notification_outbox
+						ADD COLUMN rate_limit_refusals integer NOT NULL DEFAULT 0,
+						ADD CONSTRAINT notification_outbox_rate_limit_refusals_check
+						  CHECK (rate_limit_refusals >= 0 AND rate_limit_refusals <= attempts);
+				END IF;
+			END $$;`)
+	})
+
+	// Down script (008 down read directly from migrations directory):
+	downBytes, err := os.ReadFile(filepath.Join("..", "..", "migrations", "008_notification_rate_limit_refusals.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 008 down file: %v", err)
+	}
+	downSQL := string(downBytes)
+	if _, err := c.Exec(ctx, downSQL); err != nil {
+		t.Fatalf("migration 008 down: %v", err)
+	}
+	// Verify down migration is idempotent:
+	if _, err := c.Exec(ctx, downSQL); err != nil {
+		t.Fatalf("migration 008 down idempotent rerun: %v", err)
+	}
+
+	ch0 := mkChannel(t, c, f, "VERIFIED", true, false)
+	ch3 := mkChannel(t, c, f, "VERIFIED", true, false)
+	ch7 := mkChannel(t, c, f, "VERIFIED", true, false)
+
+	// Insert existing rows while column is absent:
+	id0 := seedOutbox(t, c, f, ch0, "DOWN", nil, "PENDING")
+	id3 := seedOutbox(t, c, f, ch3, "DOWN", nil, "PENDING")
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET attempts=3 WHERE id=$1`, id3); err != nil {
+		t.Fatal(err)
+	}
+	id7 := seedOutbox(t, c, f, ch7, "DOWN", nil, "PENDING")
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET attempts=7 WHERE id=$1`, id7); err != nil {
+		t.Fatal(err)
+	}
+
+	// Up script (008 up read directly from migrations directory):
+	upBytes, err := os.ReadFile(filepath.Join("..", "..", "migrations", "008_notification_rate_limit_refusals.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 008 up file: %v", err)
+	}
+	upSQL := string(upBytes)
+	if _, err := c.Exec(ctx, upSQL); err != nil {
+		t.Fatalf("migration 008 up: %v", err)
+	}
+
+	// Verify conservative zero-backfill for existing records:
+	for _, id := range []uuid.UUID{id0, id3, id7} {
+		var refusals int
+		if err := c.QueryRow(ctx, `SELECT rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`, id).Scan(&refusals); err != nil {
+			t.Fatalf("query refusals for %s: %v", id, err)
+		}
+		if refusals != 0 {
+			t.Fatalf("expected zero-backfill, got %d for row %s", refusals, id)
+		}
+	}
+
+	// Check constraint enforcement:
+	// 1. Negative refusals (< 0) must fail
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET rate_limit_refusals=-1 WHERE id=$1`, id0); err == nil {
+		t.Fatal("negative rate_limit_refusals accepted by check constraint")
+	}
+	// 2. Refusals > attempts must fail
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET rate_limit_refusals=4 WHERE id=$1`, id3); err == nil {
+		t.Fatal("rate_limit_refusals > attempts accepted by check constraint")
+	}
+	// 3. Refusals <= attempts must succeed
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET rate_limit_refusals=3 WHERE id=$1`, id3); err != nil {
+		t.Fatalf("valid rate_limit_refusals <= attempts rejected: %v", err)
 	}
 }

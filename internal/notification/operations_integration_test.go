@@ -45,7 +45,7 @@ func TestRetryDeadHead(t *testing.T) {
 	}
 	// Kill the head → rec is now blocked behind DEAD (not a head).
 	if _, err := pool.Exec(context.Background(),
-		`UPDATE uptime.notification_outbox SET state='DEAD' WHERE id=$1`,
+		`UPDATE uptime.notification_outbox SET state='DEAD', attempts=7, rate_limit_refusals=6 WHERE id=$1`,
 		head); err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +74,12 @@ func TestRetryDeadHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	var state, key string
-	var attempts int
+	var attempts, refusals int
 	pool.QueryRow(context.Background(),
-		`SELECT state,event_key,attempts FROM uptime.notification_outbox WHERE id=$1`,
-		head).Scan(&state, &key, &attempts)
-	if state != "PENDING" || attempts != 0 {
-		t.Fatalf("retry: state=%s attempts=%d", state, attempts)
+		`SELECT state,event_key,attempts,rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`,
+		head).Scan(&state, &key, &attempts, &refusals)
+	if state != "PENDING" || attempts != 0 || refusals != 0 {
+		t.Fatalf("retry: state=%s attempts=%d refusals=%d", state, attempts, refusals)
 	}
 	// Event identity unchanged — no new row appeared.
 	var n int
@@ -249,5 +249,155 @@ func TestQueueTestNotification(t *testing.T) {
 		f.userID, f.monID, ch, DefaultTestRate); !errors.Is(err, ErrDuplicateTest) &&
 		!errors.Is(err, ErrRateLimited) {
 		t.Fatalf("duplicate: %v", err)
+	}
+}
+
+// TestCausalOrderingAcrossRetriesAndReclaims proves causal gate:
+// RECOVERY is never claimed while DOWN is DEAD, PENDING, or LEASED.
+// Operator retry resets both attempts and refusals atomically.
+// Reclaim preserves causal block, and only terminal SENT releases RECOVERY.
+func TestCausalOrderingAcrossRetriesAndReclaims(t *testing.T) {
+	ctx := context.Background()
+	ops, pool := opsFor(t)
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+	cfg := LeaseConfig{Batch: 5, LeaseFor: time.Minute, MaxAttempts: 8}
+
+	head := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	rec := seedOutbox(t, c, f, ch, "RECOVERY", &head, "PENDING")
+
+	// 1. Initial claim: only DOWN is claimable.
+	claims, err := ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 || claims[0].ID != head {
+		t.Fatalf("expected claim of head only, got %v claims=%+v", err, claims)
+	}
+
+	// 2. Head fails to DEAD with both attempts and refusals accumulated.
+	if _, err := pool.Exec(ctx,
+		`UPDATE uptime.notification_outbox
+		 SET state='DEAD', attempts=8, rate_limit_refusals=4, lease_token=NULL, lease_expires_at=NULL
+		 WHERE id=$1`, head); err != nil {
+		t.Fatal(err)
+	}
+
+	// RECOVERY must remain blocked behind DEAD head.
+	claims, err = ClaimDue(ctx, c, cfg)
+	if !errors.Is(err, ErrClaimClosed) || len(claims) != 0 {
+		t.Fatalf("expected ErrClaimClosed while head is DEAD, got %v len=%d", err, len(claims))
+	}
+
+	// 3. Operator retries DEAD head.
+	var headVer int64
+	if err := pool.QueryRow(ctx, `SELECT version FROM uptime.notification_outbox WHERE id=$1`, head).Scan(&headVer); err != nil {
+		t.Fatal(err)
+	}
+	if err := ops.RetryDeadHead(ctx, head, headVer); err != nil {
+		t.Fatalf("retry dead head: %v", err)
+	}
+
+	// Verify both attempt and refusal counters reset to zero atomically.
+	var state string
+	var attempts, refusals int
+	if err := pool.QueryRow(ctx,
+		`SELECT state, attempts, rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`, head).
+		Scan(&state, &attempts, &refusals); err != nil {
+		t.Fatal(err)
+	}
+	if state != "PENDING" || attempts != 0 || refusals != 0 {
+		t.Fatalf("head not reset: state=%s attempts=%d refusals=%d", state, attempts, refusals)
+	}
+
+	// 4. Claim re-armed head.
+	claims, err = ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 || claims[0].ID != head {
+		t.Fatalf("expected claim of re-armed head, got %v claims=%+v", err, claims)
+	}
+
+	// While head is LEASED, RECOVERY must remain blocked.
+	blockedClaims, bErr := ClaimDue(ctx, c, cfg)
+	if !errors.Is(bErr, ErrClaimClosed) || len(blockedClaims) != 0 {
+		t.Fatalf("expected RECOVERY blocked while head is LEASED, got %v len=%d", bErr, len(blockedClaims))
+	}
+
+	// 5. Head expires lease and is reclaimed.
+	if _, err := pool.Exec(ctx,
+		`UPDATE uptime.notification_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`,
+		head); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := ReclaimExpired(ctx, c, cfg)
+	if err != nil || reclaimed != 1 {
+		t.Fatalf("expected 1 reclaim, got %d %v", reclaimed, err)
+	}
+
+	// After reclaim, head is PENDING again; RECOVERY must STILL be blocked.
+	blockedClaims, bErr = ClaimDue(ctx, c, LeaseConfig{Batch: 1, LeaseFor: time.Minute, MaxAttempts: 8})
+	if bErr != nil || len(blockedClaims) != 1 || blockedClaims[0].ID != head {
+		t.Fatalf("expected head claim after reclaim, got %v claims=%+v", bErr, blockedClaims)
+	}
+
+	// 6. Deliver and ACK head.
+	acked, err := AckDelivery(ctx, c, head, blockedClaims[0].LeaseToken)
+	if err != nil || !acked {
+		t.Fatalf("ack head: acked=%v err=%v", acked, err)
+	}
+
+	// 7. Now that head is SENT, RECOVERY is released and claimable!
+	recClaims, err := ClaimDue(ctx, c, cfg)
+	if err != nil || len(recClaims) != 1 || recClaims[0].ID != rec {
+		t.Fatalf("expected RECOVERY claimed after head SENT, got %v claims=%+v", err, recClaims)
+	}
+
+	// ACK recovery.
+	recAcked, err := AckDelivery(ctx, c, rec, recClaims[0].LeaseToken)
+	if err != nil || !recAcked {
+		t.Fatalf("ack recovery: acked=%v err=%v", recAcked, err)
+	}
+}
+
+// TestRetryDeadHeadRejectsActiveWorkerLease proves that an active worker lease
+// cannot be interrupted or reset by a racing operator retry.
+func TestRetryDeadHeadRejectsActiveWorkerLease(t *testing.T) {
+	ctx := context.Background()
+	ops, pool := opsFor(t)
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+	cfg := LeaseConfig{Batch: 5, LeaseFor: time.Minute, MaxAttempts: 8}
+
+	head := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+
+	// Worker claims the row: state moves to LEASED.
+	claims, err := ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 || claims[0].ID != head {
+		t.Fatalf("expected claim of head, got %v claims=%+v", err, claims)
+	}
+
+	var headVer int64
+	if err := pool.QueryRow(ctx, `SELECT version FROM uptime.notification_outbox WHERE id=$1`, head).Scan(&headVer); err != nil {
+		t.Fatal(err)
+	}
+
+	// Racing operator retry attempt must be rejected because row is LEASED (not DEAD).
+	err = ops.RetryDeadHead(ctx, head, headVer)
+	if !errors.Is(err, ErrNotDead) {
+		t.Fatalf("expected ErrNotDead for leased row, got %v", err)
+	}
+
+	// Active worker delivers successfully and ACKs: row moves to SENT without corruption.
+	acked, err := AckDelivery(ctx, c, head, claims[0].LeaseToken)
+	if err != nil || !acked {
+		t.Fatalf("expected worker ACK to succeed: acked=%v err=%v", acked, err)
+	}
+
+	var state string
+	if err := pool.QueryRow(ctx, `SELECT state FROM uptime.notification_outbox WHERE id=$1`, head).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "SENT" {
+		t.Fatalf("expected state SENT after worker ACK, got %s", state)
 	}
 }

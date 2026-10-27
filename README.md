@@ -68,6 +68,7 @@ The API and engine run within the application. The [engine lifecycle](docs/engin
 ## Start here
 
 - [Product requirements and scope](docs/product-requirements.md): user-facing requirements and non-goals.
+- [Business rules and implementation map](docs/business-rules.md): actors, incident transitions, notification boundaries and source links.
 - [Documentation index](docs/README.md): toolchain, runbooks, testing and operations docs.
 - [Toolchain pins](docs/toolchain.md) and the [local database runbook](docs/runbooks/local-database.md).
 - [Container release policy](docs/releases/container-policy.md) and [release evidence](docs/releases/v0.1.0-evidence.md).

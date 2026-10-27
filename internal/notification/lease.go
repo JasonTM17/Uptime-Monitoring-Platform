@@ -43,18 +43,19 @@ func (c LeaseConfig) valid() error {
 // Claim is leased work: the row identity plus the lease token that
 // alone may ACK or reschedule it.
 type Claim struct {
-	ID             uuid.UUID
-	MonitorID      uuid.UUID
-	UserID         uuid.UUID
-	ChannelID      uuid.UUID
-	IncidentID     *uuid.UUID
-	EventKind      string
-	ChannelVersion int64
-	LeaseToken     uuid.UUID
-	LeaseExpires   time.Time
-	Attempts       int
-	CreatedAt      time.Time
-	SafePayload    []byte
+	ID                uuid.UUID
+	MonitorID         uuid.UUID
+	UserID            uuid.UUID
+	ChannelID         uuid.UUID
+	IncidentID        *uuid.UUID
+	EventKind         string
+	ChannelVersion    int64
+	LeaseToken        uuid.UUID
+	LeaseExpires      time.Time
+	Attempts          int
+	RateLimitRefusals int
+	CreatedAt         time.Time
+	SafePayload       []byte
 }
 
 // ClaimDue leases up to cfg.Batch causally-eligible due rows in ONE
@@ -95,7 +96,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 
 	rows, err := tx.Query(ctx, `
 		SELECT o.id,o.monitor_id,o.user_id,o.channel_id,o.incident_id,
-		       o.event_kind,o.channel_version,o.attempts,o.created_at,
+		       o.event_kind,o.channel_version,o.attempts,o.rate_limit_refusals,o.created_at,
 		       o.safe_payload
 		FROM uptime.notification_outbox o
 		WHERE o.state='PENDING' AND o.next_attempt_at <= clock_timestamp()
@@ -113,7 +114,7 @@ func ClaimDue(ctx context.Context, conn *pgx.Conn,
 	for rows.Next() {
 		var c Claim
 		if err := rows.Scan(&c.ID, &c.MonitorID, &c.UserID, &c.ChannelID,
-			&c.IncidentID, &c.EventKind, &c.ChannelVersion, &c.Attempts,
+			&c.IncidentID, &c.EventKind, &c.ChannelVersion, &c.Attempts, &c.RateLimitRefusals,
 			&c.CreatedAt, &c.SafePayload); err != nil {
 			rows.Close()
 			return nil, err
@@ -191,9 +192,15 @@ func RescheduleDelivery(ctx context.Context, conn *pgx.Conn,
 	var st string
 	err := conn.QueryRow(ctx, `
 		UPDATE uptime.notification_outbox
-		SET state = CASE WHEN attempts >= $4 THEN 'DEAD' ELSE 'PENDING' END,
-		    next_attempt_at = CASE WHEN attempts >= $4
+		SET state = CASE WHEN (CASE WHEN $5 = 'RATE_LIMITED'
+		                               THEN rate_limit_refusals + 1
+		                               ELSE attempts - rate_limit_refusals END) >= $4
+		                 THEN 'DEAD' ELSE 'PENDING' END,
+		    next_attempt_at = CASE WHEN (CASE WHEN $5 = 'RATE_LIMITED'
+		                                        THEN rate_limit_refusals + 1
+		                                        ELSE attempts - rate_limit_refusals END) >= $4
 		                           THEN next_attempt_at ELSE $3 END,
+		    rate_limit_refusals = rate_limit_refusals + CASE WHEN $5 = 'RATE_LIMITED' THEN 1 ELSE 0 END,
 		    lease_token=NULL, lease_expires_at=NULL,
 		    last_error_code=$5, version=version+1
 		WHERE id=$1 AND lease_token=$2 AND state='LEASED'
@@ -255,12 +262,12 @@ func ReclaimExpired(ctx context.Context, conn *pgx.Conn,
 	}
 	tag, err := conn.Exec(ctx, `
 		UPDATE uptime.notification_outbox
-		SET state = CASE WHEN attempts >= $2 THEN 'DEAD' ELSE 'PENDING' END,
-		    next_attempt_at = CASE WHEN attempts >= $2
+		SET state = CASE WHEN attempts - rate_limit_refusals >= $2 THEN 'DEAD' ELSE 'PENDING' END,
+		    next_attempt_at = CASE WHEN attempts - rate_limit_refusals >= $2
 		                           THEN next_attempt_at
 		                           ELSE clock_timestamp() END,
 		    lease_token=NULL, lease_expires_at=NULL,
-		    last_error_code = CASE WHEN attempts >= $2
+		    last_error_code = CASE WHEN attempts - rate_limit_refusals >= $2
 		                           THEN 'LEASE_LOST'
 		                           ELSE last_error_code END,
 		    version=version+1

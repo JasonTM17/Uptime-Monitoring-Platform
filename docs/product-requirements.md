@@ -5,10 +5,10 @@ what the platform must do, what it must not do, and where each requirement is
 verified. It intentionally does not reproduce or link the project's private
 planning artifacts; requirement IDs below are the stable public references.
 
-Status: Local implementation and R18 acceptance are verified. Free hosting
-(R19), container publication (R24), and final GitHub About/release actions
-(R20) remain pending. This document defines the full target scope; it does not
-claim hosted availability or public container images.
+Status: Local acceptance and container distribution are recorded in the
+[release evidence](releases/v0.1.0-evidence.md). The release image is public
+on Docker Hub and GHCR. Hosted deployment remains unverified; see the
+[deployment guides](README.md#operations) for its prerequisites.
 
 ## Product summary
 
@@ -18,7 +18,7 @@ incidents, and receive verified Telegram alert/recovery notifications. Platform
 administrators hold explicit permissions for accounts, sessions, quotas,
 operational health, roles, and audit history.
 
-Stack commitment: Go (`net/http` + chi, pgx, PostgreSQL) modular monolith,
+Stack commitment: Go (`net/http`, pgx, PostgreSQL) modular monolith,
 React/Vite/TypeScript/Tailwind dashboard. Local-first: cloud deployment happens
 only after the local acceptance gate passes.
 
@@ -43,7 +43,12 @@ only after the local acceptance gate passes.
 - No weakening of security or Admin scope to meet a date; the forecast moves
   instead.
 
-## Requirement traceability (R → phase → gate)
+## Requirement traceability
+
+The phase references below identify the historical implementation sequence,
+not live test results. For executable checks, see [testing](testing.md),
+[engine lifecycle](engine-lifecycle.md), [security](security/rbac-matrix.md),
+and the [API contract](api/openapi.yaml). Release evidence is recorded separately.
 
 | Req | Requirement (summary) | Producing phase | Verified at |
 |---|---|---|---|
@@ -105,14 +110,9 @@ only after the local acceptance gate passes.
 These are configuration profiles, not two codebases. No profile may relax the
 URL/internal-network policy. Quotas increase only after measurement.
 
-## Time forecast and open decisions
+## Operating decisions
 
-Full scope estimate: 252–337 hours plus ~20% contingency (roughly 302–404
-hours). At 10–15 hours/week that is approximately 20–41 weeks. The initial
-12–16 week target is a progress-review checkpoint, not a promise; weeks 4/8/12
-re-forecast from actual hours.
-
-Open decisions owned by the user at their checkpoints: free domain/provider
-accounts, license selection (MIT proposed), Telegram recipient and key backup,
-external uptime keepalive choice, and any future public-history or publication
-authorization.
+The repository is [MIT licensed](../LICENSE). Deployment providers, external
+uptime checks, Telegram recipients and encryption-key backup remain operator
+decisions. Published container evidence does not establish a running hosted
+service; see [release evidence](releases/v0.1.0-evidence.md).

@@ -331,6 +331,9 @@ func TestAdminDeliveryOrdering(t *testing.T) {
 	t.Run("retry dead head re-arms pending", func(t *testing.T) {
 		// Fresh chain: dead head, sent predecessor constraint absent.
 		h2, c2 := seedDeliveryChain(t, conn, monID, owner.UserID)
+		if _, err := conn.Exec(ctx, `UPDATE uptime.notification_outbox SET attempts=7, rate_limit_refusals=6 WHERE id=$1`, h2); err != nil {
+			t.Fatal(err)
+		}
 		// Suppress h2's chain then retry the dead head — terminal
 		// predecessor absent at head → retry allowed.
 		res, err := admin.RetryDeliveryChain(ctx, conn, op, h2,
@@ -343,11 +346,12 @@ func TestAdminDeliveryOrdering(t *testing.T) {
 			t.Fatalf("retry response: %+v", res)
 		}
 		var st string
+		var attempts, refusals int
 		_ = conn.QueryRow(ctx, `
-			SELECT state FROM uptime.notification_outbox WHERE id=$1`,
-			h2).Scan(&st)
-		if st != "PENDING" {
-			t.Fatalf("head not re-armed: %s", st)
+			SELECT state, attempts, rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`,
+			h2).Scan(&st, &attempts, &refusals)
+		if st != "PENDING" || attempts != 0 || refusals != 0 {
+			t.Fatalf("head not re-armed: %s attempts=%d refusals=%d", st, attempts, refusals)
 		}
 		_ = c2
 	})
@@ -366,6 +370,36 @@ func TestAdminDeliveryOrdering(t *testing.T) {
 			time.Now())
 		if !errors.Is(err, admin.ErrIdempotencyConflict) {
 			t.Fatalf("want ErrIdempotencyConflict, got %v", err)
+		}
+	})
+
+	t.Run("retry delivery chain version and state fences", func(t *testing.T) {
+		h4, c4 := seedDeliveryChain(t, conn, monID, owner.UserID)
+		// 1. Version mismatch returns ErrStaleEpoch.
+		_, err := admin.RetryDeliveryChain(ctx, conn, op, h4,
+			admin.DeliveryActionInput{ExpectedVersion: 999, Reason: "wrong ver"},
+			"k-d-fence-1", []byte(`{"expected_version":999,"reason":"wrong ver"}`), time.Now())
+		if !errors.Is(err, admin.ErrStaleEpoch) {
+			t.Fatalf("expected ErrStaleEpoch on version mismatch, got %v", err)
+		}
+
+		// 2. Non-dead delivery (c4 is PENDING) returns ErrDeliveryState.
+		_, err = admin.RetryDeliveryChain(ctx, conn, op, c4,
+			admin.DeliveryActionInput{ExpectedVersion: 1, Reason: "retry non-dead"},
+			"k-d-fence-2", []byte(`{"expected_version":1,"reason":"retry non-dead"}`), time.Now())
+		if !errors.Is(err, admin.ErrDeliveryState) {
+			t.Fatalf("expected ErrDeliveryState for PENDING row, got %v", err)
+		}
+
+		// 3. DEAD child behind non-terminal predecessor returns ErrDeliveryNotHead.
+		if _, err := conn.Exec(ctx, `UPDATE uptime.notification_outbox SET state='DEAD' WHERE id=$1`, c4); err != nil {
+			t.Fatal(err)
+		}
+		_, err = admin.RetryDeliveryChain(ctx, conn, op, c4,
+			admin.DeliveryActionInput{ExpectedVersion: 1, Reason: "retry non-head child"},
+			"k-d-fence-3", []byte(`{"expected_version":1,"reason":"retry non-head child"}`), time.Now())
+		if !errors.Is(err, admin.ErrDeliveryNotHead) {
+			t.Fatalf("expected ErrDeliveryNotHead for child behind dead head, got %v", err)
 		}
 	})
 }
