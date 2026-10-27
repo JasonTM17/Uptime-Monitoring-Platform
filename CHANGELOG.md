@@ -63,6 +63,6 @@ is not included. Registry digests are recorded in
 - The release image is public on Docker Hub and GHCR. Both registries resolve
   to the same OCI index digest; see
   [release evidence](docs/releases/v0.1.0-evidence.md) for the full digest.
-- GHCR visibility and anonymous pulls are verified. The package-to-repository
-  association remains open and is recorded on the evidence page.
+- GHCR visibility, repository association, and anonymous pulls are verified;
+  the evidence page records the matching digest and verification details.
 - Hosted deployment on Vercel, Render, or Supabase is **NOT_RUN**.

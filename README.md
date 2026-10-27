@@ -56,4 +56,4 @@ Use the guides in [`docs/`](docs/README.md) for setup, testing, and operations. 
 
 ## Release and license
 
-The project is licensed under [MIT](LICENSE). The `v0.1.0-rc.1` image is public on Docker Hub and GHCR; GHCR's repository association remains open. See the [container release policy](docs/releases/container-policy.md) for distribution requirements and the [release evidence page](docs/releases/v0.1.0-evidence.md) for the verified digest and registry state. Hosted deployment guides cover [Render](docs/deployment/render.md), [Vercel](docs/deployment/vercel.md), and [Supabase](docs/deployment/supabase.md).
+The project is licensed under [MIT](LICENSE). The `v0.1.0-rc.1` image is public on Docker Hub and GHCR, and the GHCR package is linked to this repository. See the [container release policy](docs/releases/container-policy.md) for distribution requirements and the [release evidence page](docs/releases/v0.1.0-evidence.md) for the verified digest and registry state. Hosted deployment guides cover [Render](docs/deployment/render.md), [Vercel](docs/deployment/vercel.md), and [Supabase](docs/deployment/supabase.md).
