@@ -2,6 +2,8 @@
 
 Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, vận hành, bảo mật, kiểm thử và phát hành. Trang release chỉ ghi nhận trạng thái phân phối sau khi các registry được kiểm chứng.
 
+- [Bắt đầu chạy dự án](../README.md#quick-start) · [Tóm tắt tiếng Việt](readme-vi.md)
+
 ## Public docs
 
 - [API contract (OpenAPI 3.1.1)](api/openapi.yaml): implemented routes
@@ -30,12 +32,21 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
   partition, raw+hourly merge, represented-window contract.
 - [Database design](architecture/database.md): ERD, table inventory và
   schema-level invariants của schema `uptime` (dẫn từ `migrations/`).
+- [SSRF boundary](security/ssrf-boundary.md) and [RBAC matrix](security/rbac-matrix.md): outbound network and authorization boundaries.
+- [Frontend testing](testing/frontend.md): browser and UI verification.
 - [Container release policy](releases/container-policy.md): image identity,
   publication prerequisites, digest and privacy requirements.
 - [Container acceptance](releases/container-acceptance.md): current registry
   verification state and remaining release boundary.
 - [Release evidence](releases/v0.1.0-evidence.md): public registry record;
   no local receipts or private planning material.
+
+## Operations
+
+- [Administrative bootstrap and recovery](runbooks/admin-recovery.md).
+- [Backup and restore](runbooks/backup-restore.md).
+- [Local health and metrics](runbooks/local-operations.md), [notification delivery](runbooks/notification-delivery.md), and [retention](runbooks/retention.md).
+- Deployment guides: [Render](deployment/render.md), [Vercel](deployment/vercel.md), [Supabase](deployment/supabase.md), and [free-tier budget](deployment/free-tier-budget.md). Hosted deployment has not been verified by the release evidence.
 
 ## Cấu trúc thư mục tài liệu
 

@@ -3,10 +3,10 @@
 Dự án cá nhân học sâu backend Go: giám sát uptime HTTP(S) công khai,
 cảnh báo sự cố, quản trị nâng cao và dashboard React.
 
-**Trạng thái: đã hoàn thành acceptance cục bộ; phân phối bên ngoài đang chờ.**
-Toàn bộ sản phẩm chạy được cục bộ trên harness compose với các gate có bằng
-chứng. Việc publish container và deploy hosted còn chặn ở các điều kiện
-thuộc quyền chủ repo (chọn license, tài khoản registry, quyền publish).
+Image `v0.1.0-rc.1` đã được phát hành công khai trên Docker Hub và GHCR.
+Kết quả kiểm tra, digest và giới hạn được ghi trong
+[`releases/v0.1.0-evidence.md`](releases/v0.1.0-evidence.md). Triển khai
+hosted chưa được xác minh.
 
 ## Sản phẩm đã có
 
@@ -25,11 +25,10 @@ chạy trên harness cục bộ deterministic (tài khoản demo tổng hợp, t
 fixture cô lập) — không phải mockup. Manifest có hash và provenance cho
 từng artifact.
 
-Chưa có deploy hosted hay publish registry được xác nhận — xem
-[`releases/container-policy.md`](releases/container-policy.md) và
-[`deployment/`](deployment/) cho trạng thái hiện tại và các blocker.
+Xem [chính sách phát hành](releases/container-policy.md) cho điều kiện
+publish và [tài liệu triển khai](deployment/) cho các hướng dẫn hosted.
 
 ## Chạy cục bộ
 
-Xem [`README.md`](../README.md) (tiếng Anh) và
-[`runbooks/local-operations.md`](runbooks/local-operations.md).
+Xem [hướng dẫn bắt đầu nhanh](../README.md#quick-start),
+[database local](runbooks/local-database.md) và [vận hành](runbooks/local-operations.md).
