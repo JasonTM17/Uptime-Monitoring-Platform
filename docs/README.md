@@ -11,6 +11,7 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
   `planned`/`x-future` là contract drafts, chưa tồn tại ở runtime.
 - [Product requirements và scope traceability](product-requirements.md):
   Must/non-goals và các yêu cầu R01–R24.
+- [Business rules and implementation map](business-rules.md): actors, incident transitions and links to their source and tests.
 - [Toolchain pins và compatibility](toolchain.md): pinned versions, local
   drift, prerequisites Windows/Linux.
 - [Runbook: local và test databases](runbooks/local-database.md):

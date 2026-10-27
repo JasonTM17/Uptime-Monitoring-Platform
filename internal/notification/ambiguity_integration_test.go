@@ -23,9 +23,10 @@ import (
 // send so the schedules can count provider-side messages
 // independently of local delivery state.
 type recordingSender struct {
-	mu    sync.Mutex
-	calls []sendCall
-	err   error
+	mu         sync.Mutex
+	calls      []sendCall
+	err        error
+	retryAfter time.Duration
 }
 
 type sendCall struct{ token, chatID, text string }
@@ -35,7 +36,15 @@ func (s *recordingSender) Send(_ context.Context, token, chatID,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, sendCall{token, chatID, text})
-	return Delivery{ProviderMessageID: int64(len(s.calls))}, s.err
+	d := Delivery{ProviderMessageID: int64(len(s.calls)), RetryAfter: s.retryAfter}
+	return d, s.err
+}
+
+func (s *recordingSender) setErr(err error, retryAfter time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+	s.retryAfter = retryAfter
 }
 
 func (s *recordingSender) count() int {
@@ -326,5 +335,122 @@ func TestDispatcherRestartOrdering(t *testing.T) {
 	if snd.count() != 0 {
 		t.Fatalf("provider sends %d — suppressed streams must not send",
 			snd.count())
+	}
+}
+
+// TestDispatcherRateLimitRefusalThenSuccessWithCausalRecovery exercises the full
+// Dispatcher pipeline on real PostgreSQL transactions:
+//  1. External provider rate limit refusal (HTTP 429) reschedules and increments rate_limit_refusals
+//     without exhausting the transient attempt budget.
+//  2. Subsequent transient failure (HTTP 502) counts toward attempts without incrementing refusals.
+//  3. RECOVERY remains blocked behind DOWN throughout refusals and retries.
+//  4. Successful delivery ACKs DOWN and immediately unblocks RECOVERY for delivery.
+func TestDispatcherRateLimitRefusalThenSuccessWithCausalRecovery(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ring := testRing(t, 1, 23)
+	ch := deliverableChannel(t, c, f, ring)
+
+	down := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	rec := seedOutbox(t, c, f, ch, "RECOVERY", &down, "PENDING")
+
+	snd := &recordingSender{}
+	d := disp(t, c, ring, snd)
+
+	// Step 1: Provider returns 429 rate limit refusal.
+	snd.setErr(ratelimitf("telegram: rate limited (retry_after=5s)"), 5*time.Second)
+	n, err := d.Tick(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("tick 1 err=%v n=%d", err, n)
+	}
+
+	// Verify DOWN counters in DB: attempts=1, rate_limit_refusals=1, last_error_code=RATE_LIMITED, state=PENDING
+	var state, errCode string
+	var attempts, refusals int
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals, COALESCE(last_error_code, '') FROM uptime.notification_outbox WHERE id=$1`, down).
+		Scan(&state, &attempts, &refusals, &errCode); err != nil {
+		t.Fatal(err)
+	}
+	if state != "PENDING" || attempts != 1 || refusals != 1 || errCode != "RATE_LIMITED" {
+		t.Fatalf("after rate limit: state=%s attempts=%d refusals=%d code=%s", state, attempts, refusals, errCode)
+	}
+
+	// RECOVERY must remain strictly blocked (predecessor not yet SENT).
+	if st := stateOf(t, c, rec); st != "PENDING" {
+		t.Fatalf("recovery state was mutated: %s", st)
+	}
+	var recAttempts int
+	if err := c.QueryRow(ctx, `SELECT attempts FROM uptime.notification_outbox WHERE id=$1`, rec).Scan(&recAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if recAttempts != 0 {
+		t.Fatalf("recovery was claimed prematurely: attempts=%d", recAttempts)
+	}
+
+	// Step 2: Make DOWN due again, and simulate transient provider 502 error.
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET next_attempt_at=clock_timestamp()-interval '1s' WHERE id=$1`, down); err != nil {
+		t.Fatal(err)
+	}
+	snd.setErr(retryablef("telegram: provider 502"), 0)
+	n, err = d.Tick(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("tick 2 err=%v n=%d", err, n)
+	}
+
+	// In DB: attempts=2, rate_limit_refusals=1 (unchanged!), last_error_code=RETRYABLE, state=PENDING
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals, COALESCE(last_error_code, '') FROM uptime.notification_outbox WHERE id=$1`, down).
+		Scan(&state, &attempts, &refusals, &errCode); err != nil {
+		t.Fatal(err)
+	}
+	if state != "PENDING" || attempts != 2 || refusals != 1 || errCode != "RETRYABLE" {
+		t.Fatalf("after transient error: state=%s attempts=%d refusals=%d code=%s", state, attempts, refusals, errCode)
+	}
+
+	// RECOVERY still blocked.
+	if st := stateOf(t, c, rec); st != "PENDING" {
+		t.Fatalf("recovery prematurely released: %s", st)
+	}
+
+	// Step 3: Make DOWN due again, provider succeeds.
+	if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET next_attempt_at=clock_timestamp()-interval '1s' WHERE id=$1`, down); err != nil {
+		t.Fatal(err)
+	}
+	snd.setErr(nil, 0)
+	n, err = d.Tick(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("tick 3 err=%v n=%d", err, n)
+	}
+
+	// In DB: DOWN is now SENT!
+	var sentAt *time.Time
+	var lastErr *string
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals, last_error_code, sent_at FROM uptime.notification_outbox WHERE id=$1`, down).
+		Scan(&state, &attempts, &refusals, &lastErr, &sentAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "SENT" || attempts != 3 || refusals != 1 || lastErr != nil || sentAt == nil {
+		t.Fatalf("after send: state=%s attempts=%d refusals=%d lastErr=%v sentAt=%v", state, attempts, refusals, lastErr, sentAt)
+	}
+
+	// Step 4: Now RECOVERY is unlocked and claimed!
+	n, err = d.Tick(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("tick 4 err=%v n=%d", err, n)
+	}
+
+	// RECOVERY in DB: SENT!
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals, last_error_code, sent_at FROM uptime.notification_outbox WHERE id=$1`, rec).
+		Scan(&state, &attempts, &refusals, &lastErr, &sentAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "SENT" || attempts != 1 || refusals != 0 || lastErr != nil || sentAt == nil {
+		t.Fatalf("recovery: state=%s attempts=%d refusals=%d lastErr=%v sentAt=%v", state, attempts, refusals, lastErr, sentAt)
+	}
+
+	// Total sends: 1 (refused) + 1 (502) + 1 (DOWN delivered) + 1 (RECOVERY delivered) = 4 provider calls.
+	if snd.count() != 4 {
+		t.Fatalf("expected 4 provider sends, got %d", snd.count())
 	}
 }

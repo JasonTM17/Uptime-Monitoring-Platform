@@ -107,19 +107,20 @@ func TestTelegramClassification(t *testing.T) {
 		body       string
 		permanent  bool
 		retryable  bool
+		rateLimit  bool
 		retryAfter time.Duration
 	}{
 		{"rate limited", 429,
 			`{"ok":false,"error_code":429,"parameters":{"retry_after":7}}`,
-			false, true, 7 * time.Second},
-		{"provider 5xx", 502, `bad gateway`, false, true, 0},
+			false, true, true, 7 * time.Second},
+		{"provider 5xx", 502, `bad gateway`, false, true, false, 0},
 		{"bot blocked", 403,
 			`{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}`,
-			true, false, 0},
+			true, false, false, 0},
 		{"bad chat", 400,
 			`{"ok":false,"error_code":400,"description":"chat not found"}`,
-			true, false, 0},
-		{"malformed ok", 200, `not json`, false, true, 0},
+			true, false, false, 0},
+		{"malformed ok", 200, `not json`, false, true, false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -133,8 +134,8 @@ func TestTelegramClassification(t *testing.T) {
 			if !errors.As(err, &se) {
 				t.Fatalf("untyped error %v", err)
 			}
-			if se.Permanent != c.permanent || se.Retryable != c.retryable {
-				t.Fatalf("perm=%v retry=%v err=%v", se.Permanent, se.Retryable, err)
+			if se.Permanent != c.permanent || se.Retryable != c.retryable || se.RateLimit != c.rateLimit {
+				t.Fatalf("perm=%v retry=%v ratelimit=%v err=%v", se.Permanent, se.Retryable, se.RateLimit, err)
 			}
 			if d.RetryAfter != c.retryAfter {
 				t.Fatalf("retry_after %v want %v", d.RetryAfter, c.retryAfter)

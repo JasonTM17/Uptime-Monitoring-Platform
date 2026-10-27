@@ -281,3 +281,191 @@ func TestRescheduleBudget(t *testing.T) {
 		t.Fatalf("error code %q", code)
 	}
 }
+
+func TestRateLimitAccountingAndLeaseFencing(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+	id := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	cfg := LeaseConfig{Batch: 5, LeaseFor: time.Minute, MaxAttempts: 8}
+	for n := 1; n <= 7; n++ {
+		claims, err := ClaimDue(ctx, c, cfg)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim %d: %v", n, err)
+		}
+		stale, err := RescheduleDelivery(ctx, c, id, uuid.New(), time.Now(), "RATE_LIMITED", 64)
+		if err != nil || stale != DispositionStale {
+			t.Fatalf("stale: %s %v", stale, err)
+		}
+		d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RATE_LIMITED", 64)
+		if err != nil || d != DispositionPending {
+			t.Fatalf("refusal %d: %s %v", n, d, err)
+		}
+	}
+	claims, err := ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("send claim: %v", err)
+	}
+	if claims[0].Attempts != 8 || claims[0].RateLimitRefusals != 7 {
+		t.Fatalf("counters: %+v", claims[0])
+	}
+	d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RETRYABLE", 8)
+	if err != nil || d != DispositionPending {
+		t.Fatalf("first failure: %s %v", d, err)
+	}
+	claims, err = ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("crash claim: %v", err)
+	}
+	if _, err = c.Exec(ctx, `UPDATE uptime.notification_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ReclaimExpired(ctx, c, cfg); err != nil || n != 1 {
+		t.Fatalf("reclaim: %d %v", n, err)
+	}
+	if stateOf(t, c, id) != "PENDING" {
+		t.Fatal("reclaim ignored refusal counter")
+	}
+}
+
+func TestRateLimitRefusalCeiling(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+	id := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	for n := 1; n <= 3; n++ {
+		claims, err := ClaimDue(ctx, c, testLease)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim %d: %v", n, err)
+		}
+		d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RATE_LIMITED", 3)
+		want := DispositionPending
+		if n == 3 {
+			want = DispositionDead
+		}
+		if err != nil || d != want {
+			t.Fatalf("refusal %d: %s %v", n, d, err)
+		}
+	}
+}
+
+func TestEffectiveBudgetExhaustionAfterRefusals(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	cfg := LeaseConfig{Batch: 5, LeaseFor: time.Minute, MaxAttempts: 8}
+	for _, mode := range []string{"retry", "crash"} {
+		t.Run(mode, func(t *testing.T) {
+			ch := mkChannel(t, c, f, "VERIFIED", true, false)
+			id := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+			if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET attempts=14, rate_limit_refusals=7 WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			claims, err := ClaimDue(ctx, c, cfg)
+			if err != nil || len(claims) != 1 {
+				t.Fatalf("claim: %v", err)
+			}
+			if mode == "retry" {
+				d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now(), "RETRYABLE", 8)
+				if err != nil || d != DispositionDead {
+					t.Fatalf("retry: %s %v", d, err)
+				}
+			} else {
+				if _, err := c.Exec(ctx, `UPDATE uptime.notification_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`, id); err != nil {
+					t.Fatal(err)
+				}
+				if n, err := ReclaimExpired(ctx, c, cfg); err != nil || n != 1 {
+					t.Fatalf("reclaim: %d %v", n, err)
+				}
+				if stateOf(t, c, id) != "DEAD" {
+					t.Fatal("ambiguous eighth claim must exhaust budget")
+				}
+			}
+		})
+	}
+}
+
+func TestExternalProviderRateLimitDeductionAndRetryEligibility(t *testing.T) {
+	ctx := context.Background()
+	c := conn(t)
+	cleanOutbox(t, c)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, false)
+	id := seedOutbox(t, c, f, ch, "DOWN", nil, "PENDING")
+	cfg := LeaseConfig{Batch: 5, LeaseFor: time.Minute, MaxAttempts: 8}
+
+	// 7 consecutive external rate limit refusals.
+	for n := 1; n <= 7; n++ {
+		claims, err := ClaimDue(ctx, c, cfg)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim %d: %v", n, err)
+		}
+		// Provider returns 429 -> Reschedule with RATE_LIMITED.
+		d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RATE_LIMITED", 64)
+		if err != nil || d != DispositionPending {
+			t.Fatalf("refusal %d: %s %v", n, d, err)
+		}
+	}
+
+	// Verify database counters after 7 rate limit refusals:
+	var attempts, refusals int
+	var st string
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`, id).Scan(&st, &attempts, &refusals); err != nil {
+		t.Fatal(err)
+	}
+	if st != "PENDING" || attempts != 7 || refusals != 7 {
+		t.Fatalf("after 7 refusals: state=%s attempts=%d refusals=%d", st, attempts, refusals)
+	}
+
+	// 8th claim: provider fails with first transient error.
+	claims, err := ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("first transient claim: %v", err)
+	}
+	if claims[0].Attempts != 8 || claims[0].RateLimitRefusals != 7 {
+		t.Fatalf("first transient claim counters: %+v", claims[0])
+	}
+	// Reschedule with RETRYABLE (effective attempts spent = 8 - 7 = 1 < 8).
+	d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RETRYABLE", 8)
+	if err != nil || d != DispositionPending {
+		t.Fatalf("first transient failure must be PENDING: %s %v", d, err)
+	}
+
+	// Check DB state: still PENDING, transient attempts = 1.
+	if err := c.QueryRow(ctx, `SELECT state, attempts, rate_limit_refusals FROM uptime.notification_outbox WHERE id=$1`, id).Scan(&st, &attempts, &refusals); err != nil {
+		t.Fatal(err)
+	}
+	if st != "PENDING" || attempts != 8 || refusals != 7 {
+		t.Fatalf("after first transient failure: state=%s attempts=%d refusals=%d", st, attempts, refusals)
+	}
+
+	// Run transient failures 2 through 7 (total claims 9 through 14).
+	for n := 2; n <= 7; n++ {
+		claims, err := ClaimDue(ctx, c, cfg)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("transient claim %d: %v", n, err)
+		}
+		d, err := RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RETRYABLE", 8)
+		if err != nil || d != DispositionPending {
+			t.Fatalf("transient failure %d must be PENDING: %s %v", n, d, err)
+		}
+	}
+
+	// 8th transient failure (claim 15, attempts=15, refusals=7 -> 15-7=8 >= 8 -> DEAD).
+	claims, err = ClaimDue(ctx, c, cfg)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("8th transient claim: %v", err)
+	}
+	d, err = RescheduleDelivery(ctx, c, id, claims[0].LeaseToken, time.Now().Add(-time.Second), "RETRYABLE", 8)
+	if err != nil || d != DispositionDead {
+		t.Fatalf("8th transient failure must be DEAD: %s %v", d, err)
+	}
+	if stateOf(t, c, id) != "DEAD" {
+		t.Fatalf("expected state DEAD after 8 transient failures")
+	}
+}

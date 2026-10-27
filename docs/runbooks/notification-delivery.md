@@ -6,6 +6,15 @@ duplicate the external message, but a durable intent is never lost
 silently. There is no exactly-once guarantee — `event_key` dedups
 the logical event, not the provider's delivery.
 
+## Upgrade note: retry accounting
+
+Migration 008 adds a durable rate-limit refusal count. Stop all old API and
+dispatcher writers, apply migrations, then start the new version; mixed-version
+writers can reset or interpret counters inconsistently. Existing rows begin
+with zero recorded refusals because historical refusals cannot be reconstructed;
+their prior accounting and DEAD states are retained. Stop new writers before
+rolling back the migration, and account for the loss of refusal history.
+
 ## Pipeline
 
 ```
@@ -15,6 +24,12 @@ incident transition
   -> revalidate recipient fence (fresh read, no locks)
   -> rate-limit -> bounded send (5s) -> ACK SENT | reschedule | DEAD
 ```
+
+The attempts field counts claims. A separate bounded refusal count excludes
+durable rate-limit refusals from the send retry budget; a crash before the
+refusal is recorded remains an ambiguous attempt. See
+[lease.go](../../internal/notification/lease.go) and
+[dispatcher.go](../../internal/notification/dispatcher.go).
 
 Causal rule: a RECOVERY row is claimable only behind a SENT
 predecessor. A PENDING or DEAD predecessor blocks it; a SUPPRESSED
