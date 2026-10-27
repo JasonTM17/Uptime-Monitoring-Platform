@@ -340,11 +340,11 @@ func TestDispatcherRestartOrdering(t *testing.T) {
 
 // TestDispatcherRateLimitRefusalThenSuccessWithCausalRecovery exercises the full
 // Dispatcher pipeline on real PostgreSQL transactions:
-// 1. External provider rate limit refusal (HTTP 429) reschedules and increments rate_limit_refusals
-//    without exhausting the transient attempt budget.
-// 2. Subsequent transient failure (HTTP 502) counts toward attempts without incrementing refusals.
-// 3. RECOVERY remains blocked behind DOWN throughout refusals and retries.
-// 4. Successful delivery ACKs DOWN and immediately unblocks RECOVERY for delivery.
+//  1. External provider rate limit refusal (HTTP 429) reschedules and increments rate_limit_refusals
+//     without exhausting the transient attempt budget.
+//  2. Subsequent transient failure (HTTP 502) counts toward attempts without incrementing refusals.
+//  3. RECOVERY remains blocked behind DOWN throughout refusals and retries.
+//  4. Successful delivery ACKs DOWN and immediately unblocks RECOVERY for delivery.
 func TestDispatcherRateLimitRefusalThenSuccessWithCausalRecovery(t *testing.T) {
 	ctx := context.Background()
 	c := conn(t)
