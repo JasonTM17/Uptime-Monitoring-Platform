@@ -1,8 +1,7 @@
 name: ci
 
-# Definition only — a workflow file's existence is not a CI run. Local gate
-# results are recorded per commit; live CI receipts require owner-authorized
-# public-history preparation first.
+# A workflow definition is not evidence of a run. Verify the exact commit's
+# Actions result before claiming CI passed.
 
 on:
   push:

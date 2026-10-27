@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TRUSTED_REGISTRY_REFS } from "./container-release-contract.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_URL = "https://github.com/JasonTM17/Uptime-Monitoring-Platform";
@@ -501,7 +502,7 @@ async function main() {
     },
     context_receipt_sha256: ctxReceiptSha,
     registries: {
-      ghcr: "ghcr.io/jasontm17/uptime-monitoring-platform",
+      ghcr: TRUSTED_REGISTRY_REFS.ghcr,
       dockerhub: dockerhubNs,
     },
     publishable: isArtifactPublishable(licenseInfo, dockerhubNs),

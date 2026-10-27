@@ -228,9 +228,11 @@ export async function verifySourceContext(m, repoRoot = ROOT) {
     await run(["tar", "-xf", "-", "-C", tarPath(sourceRoot)],
       { input: sourceArchiveBytes, quiet: true });
     step = "context-check";
-    await run(["node", resolve(sourceRoot, "scripts/check-build-context.mjs"),
+    // The source archive is untrusted data. Execute the checker from the
+    // verifier's trusted checkout, while pointing it at the extracted context.
+    await run(["node", resolve(repoRoot, "scripts/check-build-context.mjs"),
       "--context", sourceRoot, "--dockerfile", "Dockerfile", "--verify-sentinels",
-      "--output", receipt], { quiet: true });
+      "--output", receipt], { quiet: true, cwd: repoRoot });
     step = "receipt-read";
     const context = JSON.parse(readFileSync(receipt, "utf8"));
     return context.contextHash === m.build_context_sha256.replace(/^sha256:/, "");

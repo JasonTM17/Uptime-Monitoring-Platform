@@ -1,0 +1,75 @@
+name: container-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing v<semver> tag whose commit is exactly the main source SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: validate release ref and Docker Hub target
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "container builds must be dispatched from main"
+            exit 1
+          fi
+          [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "release version is malformed"
+            exit 1
+          }
+          test "$DOCKERHUB_NAMESPACE" = "nguyenson1710/uptime-monitoring-platform" || {
+            echo "Docker Hub target does not match the owner-confirmed repository"
+            exit 1
+          }
+          tag_sha="$(git rev-parse --verify "refs/tags/$RELEASE_VERSION^{commit}")"
+          test "$tag_sha" = "$GITHUB_SHA" || {
+            echo "release tag must point to the exact checked-out source SHA"
+            exit 1
+          }
+      - name: build, attest, and scan one source artifact
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          node scripts/build-release-image.mjs \
+            --version "$RELEASE_VERSION" \
+            --dockerhub-namespace "$DOCKERHUB_NAMESPACE" \
+            --output artifacts/release/image-manifest.json
+      - name: verify local OCI digest chain
+        run: >-
+          node scripts/verify-container-release.mjs
+          --manifest artifacts/release/image-manifest.json
+          --output artifacts/release/local-verification.json
+          --stage local
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-artifact
+          path: |
+            artifacts/release/image-manifest.json
+            artifacts/release/uptime-platform-*.oci.tar
+            artifacts/release/sbom.spdx.json
+            artifacts/release/provenance.json
+            artifacts/release/govulncheck-target
+            artifacts/release/context-proof.json
+          if-no-files-found: error

@@ -58,13 +58,11 @@ is not included. Registry digests are recorded in
   self-contained smoke, OCI digest-chain verification: PASS.
 - Privacy gate over public docs/media: PASS.
 
-### Not done / blocked (owner authority required)
+### Release and deployment status
 
-- Container registry publication (license + Docker Hub account +
-  credentials + trusted publish run).
-- Anonymous dual-registry pull/run acceptance (needs published receipts).
-- Hosted deployment on Vercel/Render/Supabase (provider accounts +
-  secrets).
-- CI workflow runs (workflows defined; zero runs observed — nothing
-  pushed).
-- LICENSE file selection.
+- The release image is public on Docker Hub and GHCR. Both registries resolve
+  to the same OCI index digest; see
+  [release evidence](docs/releases/v0.1.0-evidence.md) for the full digest.
+- GHCR visibility and anonymous pulls are verified. The package-to-repository
+  association remains open and is recorded on the evidence page.
+- Hosted deployment on Vercel, Render, or Supabase is **NOT_RUN**.

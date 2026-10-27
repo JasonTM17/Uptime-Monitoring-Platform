@@ -6,12 +6,17 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { summarizeVerdict, planTags, REGISTRIES, publishAfterArtifactVerification,
-  verifyReleaseArtifactBeforePublish } from "./publish-release-image.mjs";
+  verifyReleaseArtifactBeforePublish, preflightReleaseTags, assertTrustedRegistryTargets,
+  publishAfterFinalReleaseCheck } from "./publish-release-image.mjs";
+import { TRUSTED_REGISTRY_REFS } from "./container-release-contract.mjs";
+import { BUILD_WORKFLOW_PATH, validateContainerPublishEvent }
+  from "./validate-container-publish-event.mjs";
 import { assertGovulncheckClean, assertReleaseInputsClean, isArtifactPublishable,
   sanitizeGovulncheckFailure } from "./build-release-image.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const wf = readFileSync(resolve(ROOT, ".github/workflows/container-release.yml"), "utf8");
+const wf = readFileSync(resolve(ROOT, ".github/workflows/container-build.yml"), "utf8");
+const publisherWf = readFileSync(resolve(ROOT, ".github/workflows/container-publish.yml"), "utf8");
 const builder = readFileSync(resolve(ROOT, "scripts/build-release-image.mjs"), "utf8");
 const publisher = readFileSync(resolve(ROOT, "scripts/publish-release-image.mjs"), "utf8");
 
@@ -39,38 +44,56 @@ test("summarizeVerdict: all dry-run = NOT_RUN", () => {
   assert.equal(summarizeVerdict([{ dry_run: true }, { dry_run: true }]), "NOT_RUN");
 });
 
-test("workflow has no pull_request/fork trigger", () => {
+test("release-tag preflight refuses a different digest and accepts only explicit not-found", async () => {
+  const digest = `sha256:${"b".repeat(64)}`;
+  await assert.rejects(preflightReleaseTags(["v1.2.3", "sha-a"], digest,
+    async (tag) => tag === "v1.2.3" ? `sha256:${"c".repeat(64)}` : digest),
+  /different digest; no mutation attempted/);
+  const absent = await preflightReleaseTags(["v1.2.3"], digest, async () => {
+    const error = new Error("registry inspect failed");
+    error.stderr = "manifest unknown";
+    throw error;
+  });
+  assert.deepEqual(absent, [{ tag: "v1.2.3", state: "absent" }]);
+  await assert.rejects(preflightReleaseTags(["v1.2.3"], digest, async () => {
+    const error = new Error("registry inspect failed");
+    error.stderr = "unauthorized";
+    throw error;
+  }), /cannot safely inspect.*no mutation attempted/);
+});
+
+test("secretless builder has no pull request, tag, or push trigger", () => {
   const triggers = wf.match(/^on:[\s\S]*?(?=^\w)/m)?.[0] ?? "";
-  assert.ok(!/pull_request/.test(triggers), "pull_request trigger present");
-  assert.ok(!/pull_request_target/.test(triggers), "pull_request_target present");
-  assert.ok(/tags:\s*\["v\*"\]/.test(wf), "release-tag trigger missing");
+  assert.match(triggers, /workflow_dispatch:/);
+  assert.doesNotMatch(triggers, /pull_request|pull_request_target|push:/);
 });
 
-test("workflow secrets never ride a PR context", () => {
-  // secrets.* may only appear under env: inside publish jobs — assert
-  // the file never references secrets in an if: condition on PR events.
-  assert.ok(!/github\.event_name == 'pull_request'[\s\S]*secrets\./.test(wf));
-  assert.ok(/GHCR_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/.test(wf));
-  assert.ok(/DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/.test(wf));
+test("build workflow has no registry credentials or package-write authority", () => {
+  assert.doesNotMatch(wf, /secrets\.|packages:\s*write|DOCKERHUB_TOKEN/);
+  assert.match(publisherWf, /GHCR_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.match(publisherWf, /DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/);
 });
 
-test("every uses: is pinned to a full 40-hex SHA", () => {
-  const uses = [...wf.matchAll(/uses: ([^\s#]+)/g)].map((x) => x[1]);
-  assert.ok(uses.length >= 4, "expected >=4 pinned actions");
-  for (const u of uses)
-    assert.match(u, /@[0-9a-f]{40}$/, `unpinned/mutable action: ${u}`);
+test("every workflow action is pinned to a full 40-hex SHA", () => {
+  for (const workflow of [wf, publisherWf]) {
+    const uses = [...workflow.matchAll(/uses: ([^\s#]+)/g)].map((x) => x[1]);
+    assert.ok(uses.length > 0, "expected pinned actions");
+    for (const u of uses)
+      assert.match(u, /@[0-9a-f]{40}$/, `unpinned/mutable action: ${u}`);
+  }
 });
 
-test("release is serialized, never cancelled mid-publish", () => {
-  assert.ok(/concurrency:[\s\S]*group: container-release/.test(wf));
-  assert.ok(/cancel-in-progress: false/.test(wf));
+test("build and publisher workflows cannot cancel an in-flight release", () => {
+  assert.match(wf, /cancel-in-progress: false/);
+  assert.match(publisherWf, /group: container-publish[\s\S]*cancel-in-progress: false/);
 });
 
-test("least-privilege permissions: default read, packages only on ghcr job", () => {
+test("least-privilege permissions: builder is read-only, packages only on ghcr job", () => {
   assert.ok(/^permissions:\n  contents: read$/m.test(wf));
-  const ghcr = wf.match(/publish-ghcr:[\s\S]*?(?=^  \w)/m)?.[0] ?? "";
+  assert.ok(/^permissions:\n  contents: read$/m.test(publisherWf));
+  const ghcr = publisherWf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "";
   assert.ok(/packages: write/.test(ghcr), "ghcr job missing packages: write");
-  const dh = wf.match(/publish-dockerhub:[\s\S]*?(?=^  \w)/m)?.[0] ?? "";
+  const dh = publisherWf.match(/^  publish-dockerhub:[\s\S]*?(?=^\s*$)/m)?.[0] ?? "";
   assert.ok(!/packages: write/.test(dh), "dockerhub job has unneeded packages: write");
 });
 
@@ -80,38 +103,78 @@ test("registries map uses documented secret names only", () => {
   assert.equal(REGISTRIES.dockerhub.tok_env, "DOCKERHUB_TOKEN");
 });
 
-test("build job requires and passes the configured Docker Hub image reference", () => {
-  const buildJob = wf.match(/^  build-verify:[\s\S]*?(?=^  publish-ghcr:)/m)?.[0] ?? "";
-  const step = buildJob.match(/- name: build \+ attest \+ scan[\s\S]*?--output artifacts\/release\/image-manifest\.json/)?.[0] ?? "";
-  assert.match(step, /DOCKERHUB_NAMESPACE: \$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}/);
-  assert.match(step, /test -n "\$DOCKERHUB_NAMESPACE"[^\n]*exit 3/);
-  const guardIndex = step.indexOf("test -n \"$DOCKERHUB_NAMESPACE\"");
-  const builderIndex = step.indexOf("node scripts/build-release-image.mjs");
-  assert.ok(guardIndex >= 0 && builderIndex > guardIndex, "namespace guard must precede the build");
+test("publisher target refs are bound to the owner-approved repositories", () => {
+  assert.equal(REGISTRIES.ghcr.ref, TRUSTED_REGISTRY_REFS.ghcr);
+  assert.equal(REGISTRIES.dockerhub.ref, TRUSTED_REGISTRY_REFS.dockerhub);
+  assert.equal(assertTrustedRegistryTargets({ registries: TRUSTED_REGISTRY_REFS }), true);
+});
+
+test("a manifest destination edit is rejected before registry inspect or copy", () => {
+  const events = [];
+  const manifest = { registries: { ...TRUSTED_REGISTRY_REFS,
+    dockerhub: "attacker/other-repository" } };
+  assert.throws(() => {
+    assertTrustedRegistryTargets(manifest);
+    events.push("inspect", "copy");
+  }, /registry target mismatch: dockerhub/);
+  assert.deepEqual(events, []);
+  const main = publisher.slice(publisher.indexOf("async function main()"));
+  assert.ok(main.indexOf("assertTrustedRegistryTargets(m);") <
+    main.indexOf("preflightReleaseTags("),
+  "manifest destinations must be rejected before any registry inspection");
+});
+
+test("a post-approval release-tag drift blocks the mutation callback", async () => {
+  const events = [];
+  const sha = "a".repeat(40);
+  await assert.rejects(publishAfterFinalReleaseCheck(async () => {
+    events.push("revalidate-tag");
+    const errors = validateContainerPublishEvent({
+      event: { id: 42, workflow_id: 13, conclusion: "success", head_branch: "main",
+        head_sha: sha, head_repository: { full_name: "JasonTM17/Uptime-Monitoring-Platform" } },
+      manifest: { version: "v1.2.3", source_sha: sha },
+      repository: "JasonTM17/Uptime-Monitoring-Platform", defaultBranch: "main",
+      trustedRef: "refs/heads/main", workflowPath: BUILD_WORKFLOW_PATH,
+      tagSha: "c".repeat(40), ciRuns: [{ head_sha: sha, conclusion: "success" }],
+    });
+    if (errors.length) throw new Error(`release tag no longer matches source: ${errors.join("; ")}`);
+  }, async () => events.push("registry-copy")), /release tag no longer matches source/);
+  assert.deepEqual(events, ["revalidate-tag"]);
+  assert.match(publisher, /publishAfterFinalReleaseCheck\(finalReleaseCheck/);
+});
+
+test("build job requires and passes the owner-confirmed Docker Hub reference", () => {
+  const buildJob = wf.match(/^  build-verify:[\s\S]*/m)?.[0] ?? "";
+  const step = buildJob.match(/- name: build, attest, and scan[\s\S]*?--output artifacts\/release\/image-manifest\.json/)?.[0] ?? "";
+  const guard = buildJob.match(/- name: validate release ref and Docker Hub target[\s\S]*?- name: build, attest, and scan/)?.[0] ?? "";
+  assert.match(guard, /DOCKERHUB_NAMESPACE: \$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}/);
+  assert.match(guard, /test "\$DOCKERHUB_NAMESPACE" = "nguyenson1710\/uptime-monitoring-platform"/);
+  const guardIndex = buildJob.indexOf("validate release ref and Docker Hub target");
+  const builderIndex = buildJob.indexOf("node scripts/build-release-image.mjs");
+  assert.ok(guardIndex >= 0 && builderIndex >= 0, "namespace and release-tag guard must precede build");
+  assert.ok(builderIndex > guardIndex, "release preflight must run before the build");
   assert.match(step, /--dockerhub-namespace "\$DOCKERHUB_NAMESPACE"/);
 });
 
-test("Docker Hub prerequisites gate the build and both publish jobs", () => {
-  const prerequisites = wf.match(/^  release-prerequisites:[\s\S]*?(?=^  build-verify:)/m)?.[0] ?? "";
-  const buildJob = wf.match(/^  build-verify:[\s\S]*?(?=^  publish-ghcr:)/m)?.[0] ?? "";
-  const ghcrJob = wf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "";
-  const dockerHubJob = wf.match(/^  publish-dockerhub:[\s\S]*?(?=^  release-summary:)/m)?.[0] ?? "";
+test("protected registry credentials and tags are checked before either publisher", () => {
+  const prerequisites = publisherWf.match(/^  preflight-tags:[\s\S]*?(?=^  publish-ghcr:)/m)?.[0] ?? "";
+  const ghcrJob = publisherWf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "";
+  const dockerHubJob = publisherWf.match(/^  publish-dockerhub:[\s\S]*/m)?.[0] ?? "";
   assert.match(prerequisites, /DOCKERHUB_USERNAME: \$\{\{ vars\.DOCKERHUB_USERNAME \}\}/);
   assert.match(prerequisites, /DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/);
   assert.match(prerequisites, /DOCKERHUB_NAMESPACE: \$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}/);
-  assert.match(prerequisites, /test -n "\$DOCKERHUB_USERNAME"/);
+  assert.match(prerequisites, /environment: container-release/);
   assert.match(prerequisites, /test -n "\$DOCKERHUB_TOKEN"/);
-  assert.match(prerequisites, /test -n "\$DOCKERHUB_NAMESPACE"/);
-  assert.match(prerequisites, /DOCKERHUB_NAMESPACE malformed/);
-  assert.match(buildJob, /needs: release-prerequisites/);
-  assert.match(ghcrJob, /needs: build-verify/);
-  assert.match(dockerHubJob, /needs: build-verify/);
+  assert.match(prerequisites, /--dest all --preflight-only true/);
+  assert.match(ghcrJob, /needs: \[validate-release, preflight-tags\]/);
+  assert.match(dockerHubJob, /needs: \[validate-release, preflight-tags\]/);
 });
 
 test("Docker Hub username is a variable and its token remains secret-only", () => {
-  const job = wf.match(/^  publish-dockerhub:[\s\S]*?(?=^  release-summary:)/m)?.[0] ?? "";
+  const job = publisherWf.match(/^  publish-dockerhub:[\s\S]*/m)?.[0] ?? "";
   assert.match(job, /DOCKERHUB_USERNAME: \$\{\{ vars\.DOCKERHUB_USERNAME \}\}/);
   assert.match(job, /DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/);
+  assert.match(job, /environment: container-release/);
   assert.doesNotMatch(job, /DOCKERHUB_USERNAME: \$\{\{ secrets\./);
   assert.doesNotMatch(job, /--override-ref/);
 });
@@ -121,20 +184,22 @@ test("publisher reads the OCI tar via the archive transport, not a layout direct
   assert.doesNotMatch(publisher, /`oci:\/a\/\$\{archFile\}`/);
 });
 
-test("publisher jobs check out the exact workflow source before the artifact", () => {
+test("publisher jobs check out default-branch code before downloading the build artifact", () => {
   const jobs = [
-    wf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "",
-    wf.match(/^  publish-dockerhub:[\s\S]*?(?=^  release-summary:)/m)?.[0] ?? "",
+    publisherWf.match(/^  validate-release:[\s\S]*?(?=^  preflight-tags:)/m)?.[0] ?? "",
+    publisherWf.match(/^  preflight-tags:[\s\S]*?(?=^  publish-ghcr:)/m)?.[0] ?? "",
+    publisherWf.match(/^  publish-ghcr:[\s\S]*?(?=^  publish-dockerhub:)/m)?.[0] ?? "",
+    publisherWf.match(/^  publish-dockerhub:[\s\S]*/m)?.[0] ?? "",
   ];
   for (const job of jobs) {
     const checkout = job.indexOf("actions/checkout@");
     const exactSha = job.indexOf("ref: ${{ github.sha }}");
     const artifact = job.indexOf("actions/download-artifact@");
-    const publisher = job.indexOf("node scripts/publish-release-image.mjs");
     assert.ok(checkout >= 0 && exactSha > checkout && artifact > exactSha,
-      "publisher must checkout github.sha before downloading the artifact");
-    assert.ok(publisher > artifact, "publisher CLI should run after artifact download");
+      "trusted jobs must checkout github.sha before downloading the upstream artifact");
+    assert.match(job.slice(artifact), /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
   }
+  assert.doesNotMatch(publisherWf, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
 });
 
 test("publisher runs the local artifact verifier before any registry copy", () => {
@@ -143,6 +208,8 @@ test("publisher runs the local artifact verifier before any registry copy", () =
   const copy = main.indexOf("publishOne(m, d, ref");
   assert.ok(gate >= 0 && copy > gate, "local verifier must guard the registry-copy loop");
   assert.match(publisher, /"--stage", "local"/);
+  assert.ok(publisher.indexOf("preflightReleaseTags(receipt.tags") < publisher.indexOf('"copy", "--all"'),
+    "existing release tags must be checked before copy");
 });
 
 test("failed artifact verification prevents the publisher operation from starting", async () => {

@@ -1,0 +1,202 @@
+name: container-publish
+
+on:
+  workflow_run:
+    workflows: ["container-build"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-publish
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # For workflow_run, github.sha/ref identify the current default branch,
+      # not the upstream build SHA. Never checkout workflow_run.head_sha here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-artifact
+          path: artifacts/release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: bind trusted workflow, exact source, tag, and green CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: node scripts/validate-container-publish-event.mjs artifacts/release/image-manifest.json
+      - name: verify downloaded OCI artifact with trusted publisher code
+        run: >-
+          node scripts/verify-container-release.mjs
+          --manifest artifacts/release/image-manifest.json
+          --output artifacts/release/preflight-verification.json
+          --stage local
+
+  preflight-tags:
+    needs: validate-release
+    runs-on: ubuntu-latest
+    environment: container-release
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-artifact
+          path: artifacts/release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: revalidate source, release tag, and CI after environment approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: node scripts/validate-container-publish-event.mjs artifacts/release/image-manifest.json
+      - name: require credentials and check both registries before any copy
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          REQUIRE_TRUSTED_RELEASE_EVENT: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: |
+          set -euo pipefail
+          test -n "$DOCKERHUB_USERNAME" || { echo "Docker Hub username is not configured"; exit 1; }
+          test -n "$DOCKERHUB_TOKEN" || { echo "protected Docker Hub token is not configured"; exit 1; }
+          test -n "$GHCR_TOKEN" || { echo "GITHUB_TOKEN is unavailable for package readback"; exit 1; }
+          test "$DOCKERHUB_NAMESPACE" = "nguyenson1710/uptime-monitoring-platform" || {
+            echo "Docker Hub target does not match the owner-confirmed repository"
+            exit 1
+          }
+          node scripts/publish-release-image.mjs \
+            --manifest artifacts/release/image-manifest.json \
+            --dest all --preflight-only true \
+            --output artifacts/release/tag-preflight.json
+
+  publish-ghcr:
+    needs: [validate-release, preflight-tags]
+    if: needs.validate-release.result == 'success' && needs.preflight-tags.result == 'success'
+    runs-on: ubuntu-latest
+    environment: ghcr-release
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-artifact
+          path: artifacts/release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: revalidate source, release tag, and CI after environment approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: node scripts/validate-container-publish-event.mjs artifacts/release/image-manifest.json
+      - name: verify locally, then publish the same artifact to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRE_TRUSTED_RELEASE_EVENT: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: >-
+          node scripts/publish-release-image.mjs
+          --manifest artifacts/release/image-manifest.json
+          --dest ghcr
+          --output artifacts/release/receipt-ghcr.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: receipt-ghcr
+          path: artifacts/release/receipt-ghcr.json
+          if-no-files-found: ignore
+
+  publish-dockerhub:
+    needs: [validate-release, preflight-tags]
+    if: needs.validate-release.result == 'success' && needs.preflight-tags.result == 'success'
+    runs-on: ubuntu-latest
+    environment: container-release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-artifact
+          path: artifacts/release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: revalidate source, release tag, and CI after environment approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: node scripts/validate-container-publish-event.mjs artifacts/release/image-manifest.json
+      - name: verify locally, then publish the same artifact to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          REQUIRE_TRUSTED_RELEASE_EVENT: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REF: ${{ github.ref }}
+          UPSTREAM_WORKFLOW_RUN: ${{ toJSON(github.event.workflow_run) }}
+        run: >-
+          node scripts/publish-release-image.mjs
+          --manifest artifacts/release/image-manifest.json
+          --dest dockerhub
+          --output artifacts/release/receipt-dockerhub.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: receipt-dockerhub
+          path: artifacts/release/receipt-dockerhub.json
+          if-no-files-found: ignore

@@ -7,7 +7,7 @@ This document defines the gates and identities required for container distributi
 | Registry | Image reference | Publication contract |
 | --- | --- | --- |
 | GHCR | `ghcr.io/jasontm17/uptime-monitoring-platform` | Publish with job-scoped `packages: write`; verify package visibility and source association after publication. |
-| Docker Hub | `nguyenson1710/uptime-monitoring-platform` | Owner-confirmed destination. Configure `DOCKERHUB_USERNAME` (`nguyenson1710`) and the full-image-reference `DOCKERHUB_NAMESPACE` (`nguyenson1710/uptime-monitoring-platform`) as repository variables plus `DOCKERHUB_TOKEN` as a repository secret. Never infer a destination from the GitHub account or a public profile. |
+| Docker Hub | `nguyenson1710/uptime-monitoring-platform` | Owner-confirmed fixed publisher destination. Configure `DOCKERHUB_USERNAME` and the full-image-reference `DOCKERHUB_NAMESPACE` as repository variables. The publisher rejects a manifest or override that differs from this reference before registry inspection. Keep `DOCKERHUB_TOKEN` only in the protected `container-release` environment, never as a repository secret. Never infer a destination from the GitHub account or a public profile. |
 
 GitHub Packages source association uses the OCI
 `org.opencontainers.image.source` label → `JasonTM17/Uptime-Monitoring-Platform`.
@@ -82,13 +82,30 @@ paths, usernames, or credentials in labels/args/history.
 
 ## 5. CI trust boundary (the publication workflow contract)
 
-- Trigger: protected release tag or manual dispatch on a reviewed ref.
-  `pull_request` (especially forks) never receives publish secrets.
-- Default `permissions: contents: read`. The GHCR publish job adds
-  `packages: write` and uses `github.actor` with built-in `GITHUB_TOKEN`;
-  the Docker Hub job uses `DOCKERHUB_TOKEN` secret plus the
+- `container-build` is a manual, secretless workflow on protected `main`.
+  It receives `contents: read`, validates that the release tag points at the
+  exact source SHA, and has no registry credentials or package-write access.
+- `container-publish` runs only after a successful `container-build` on
+  `main`. It checks out publisher code from the default branch, downloads the
+  artifact from that exact run, binds the event, artifact, tag, and successful
+  CI run to one source SHA, then verifies the artifact before any copy. Each
+  protected environment job repeats the source/tag/CI check after approval;
+  the publisher checks again immediately before every registry copy. The tag
+  fetch refreshes the local ref before comparison. The workflow never checks
+  out or executes code from the build artifact.
+- Both release destinations are fixed in trusted publisher code and compared
+  with the artifact manifest before registry inspection. Workflow concurrency
+  serializes publisher runs, and every copied tag is read back by digest.
+  These checks do not control writes made outside this workflow; registry
+  credentials and tag mutation rights remain an operator boundary.
+- The publisher may be treated as trusted only after `main` and the release
+  workflow paths have verified protection settings and reviewer-gated
+  environments. Only the GHCR job adds `packages: write` and uses the
+  built-in `GITHUB_TOKEN`. The Docker Hub job reads `DOCKERHUB_TOKEN` only
+  from the protected `container-release` environment, along with the
   `DOCKERHUB_USERNAME` and full-image-reference `DOCKERHUB_NAMESPACE`
   variables. No repository `GHCR_USER` or `GHCR_TOKEN` secret is needed.
+- Pull requests and tag events do not trigger the publisher.
 - Actions pinned by full commit SHA (mutable major tags are not pins).
 - The `release-artifact` allowlist contains only the manifest, OCI archive,
   SBOM, provenance, retained `govulncheck-target`, and minimized
@@ -111,9 +128,12 @@ paths, usernames, or credentials in labels/args/history.
 | `GITHUB_TOKEN` | built-in | GHCR `packages: write` (job-scoped) |
 | `DOCKERHUB_USERNAME` | Actions variable | Hub login identity |
 | `DOCKERHUB_NAMESPACE` | Actions variable | Exact `<owner>/<repository>` image reference |
-| `DOCKERHUB_TOKEN` | Actions secret | Hub publish, repository-scoped PAT |
+| `DOCKERHUB_TOKEN` | `container-release` environment secret | Hub publish; never a repository-level secret |
 
-Missing required Docker Hub setting → workflow fails **before** build or registry mutation. The GHCR token comes from built-in `GITHUB_TOKEN` with job-scoped `packages: write`.
+Missing Docker Hub credentials block the Docker Hub preflight and publish job
+before registry mutation. The secretless build can still produce a candidate
+artifact. The GHCR token comes from built-in `GITHUB_TOKEN` with job-scoped
+`packages: write`.
 
 ## 7. Registry manifest schema (evidence artifact)
 
