@@ -18,14 +18,18 @@ pulls, which are recorded separately.
 
 DB-backed tests carry `//go:build integration` and REQUIRE
 `TEST_DATABASE_URL` pointing at the **disposable** `postgres-test`
-database (port 54330) — never the local data DB:
+database — never the local data DB. Its default host port is 5433 and its
+credentials come from `.env` (see [database setup](runbooks/local-database.md)):
 
 ```sh
-docker compose --profile db up -d postgres-test      # if not running
-docker compose --profile migrate run --rm migrate-test up   # apply schema
-TEST_DATABASE_URL="postgres://uptime_test@127.0.0.1:54330/uptime_test?sslmode=disable" \
-  go test -count=1 -tags=integration ./internal/auth/
+docker compose --profile test up -d postgres-test
+docker compose --profile test run --rm migrate-test up
+docker compose --profile test run --rm go-test
 ```
+
+The `go-test` service obtains its test DSN from Compose. To run the suites
+on the host, set `TEST_DATABASE_URL` in the shell to the test database DSN
+from your local configuration and use the matching `TEST_POSTGRES_PORT`.
 
 Multi-package integration runs share the ONE disposable database:
 `go test` executes package binaries in parallel by default, and the
@@ -79,12 +83,10 @@ service + pinned `migrate/migrate:v4.20.1` schema step).
 
 ## CI honesty
 
-`.github/workflows/ci.yml` pins every action by full commit SHA and grants
-`contents: read` only. It defines format/vet/test/build and the scanner
-self-test — nothing more. A workflow file is a definition: **CI PASS is only
-claimable with a run receipt on a real commit SHA.** Live remote CI requires
-owner-authorized public-history preparation first; private planning material
-is excluded from cache/artifacts/logs by design.
+The [CI workflow](../.github/workflows/ci.yml) defines Go quality,
+PostgreSQL integration, web quality including E2E, and scanner self-test jobs.
+It pins actions by commit SHA and grants `contents: read`. A workflow file is
+a definition: **CI PASS is only claimable for an observed run on a commit SHA.**
 
 The `go-integration` job is enabled (postgres service + migrate step)
 and runs the suite under `-race`. The Linux `go-test` compose profile
