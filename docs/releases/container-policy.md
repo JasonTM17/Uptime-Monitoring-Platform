@@ -9,10 +9,10 @@ This document defines the gates and identities required for container distributi
 | GHCR | `ghcr.io/jasontm17/uptime-monitoring-platform` | Publish with job-scoped `packages: write`; verify package visibility and source association after publication. |
 | Docker Hub | `nguyenson1710/uptime-monitoring-platform` | Owner-confirmed fixed publisher destination. Configure `DOCKERHUB_USERNAME` and the full-image-reference `DOCKERHUB_NAMESPACE` as repository variables. The publisher rejects a manifest or override that differs from this reference before registry inspection. Keep `DOCKERHUB_TOKEN` only in the protected `container-release` environment, never as a repository secret. Never infer a destination from the GitHub account or a public profile. |
 
-GitHub Packages source association uses the OCI
-`org.opencontainers.image.source` label → `JasonTM17/Uptime-Monitoring-Platform`.
-A public source repo does not imply a public GHCR package — package
-visibility is verified separately (the package readback).
+The OCI `org.opencontainers.image.source` label identifies
+`JasonTM17/Uptime-Monitoring-Platform` as the source. Verify the GitHub Packages
+repository association and package visibility separately through package
+readback. A source label alone does not prove either setting.
 
 ## 2. License status
 
