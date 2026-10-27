@@ -32,6 +32,8 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
   schema-level invariants của schema `uptime` (dẫn từ `migrations/`).
 - [Container release policy](releases/container-policy.md): image identity,
   publication prerequisites, digest and privacy requirements.
+- [Container acceptance](releases/container-acceptance.md): current registry
+  verification state and remaining release boundary.
 - [Release evidence](releases/v0.1.0-evidence.md): public registry record;
   no local receipts or private planning material.
 

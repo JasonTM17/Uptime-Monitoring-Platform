@@ -306,6 +306,73 @@ test("TestReplayBuildContextFromExactSourceCommit", async () => {
   }
 });
 
+test("TestReplayNeverExecutesTheCheckerFromTheUntrustedSourceArchive", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "uptime-context-trust-test-"));
+  try {
+    const repo = join(tempRoot, "repo");
+    const extracted = join(tempRoot, "candidate-source");
+    const receipt = join(tempRoot, "context-manifest.json");
+    const marker = join(tempRoot, "candidate-checker-executed");
+    mkdirSync(join(repo, "scripts"), { recursive: true });
+    mkdirSync(join(repo, "cmd"), { recursive: true });
+    mkdirSync(join(repo, "internal"), { recursive: true });
+    mkdirSync(extracted);
+    writeFileSync(join(repo, "scripts/check-build-context.mjs"),
+      readFileSync(CONTEXT_CHECKER, "utf8"));
+    writeFileSync(join(repo, "Dockerfile"), "FROM scratch\n");
+    writeFileSync(join(repo, ".dockerignore"),
+      ".git/\nplans/\n.secrets/\nnode_modules/\n.env*\n");
+    writeFileSync(join(repo, "go.mod"), "module example.test/context\n");
+    writeFileSync(join(repo, "go.sum"), "");
+    writeFileSync(join(repo, "cmd/main.go"), "package main\n");
+    writeFileSync(join(repo, "internal/marker.go"), "package internal\n");
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo, encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["checkout", "-qb", "main"],
+      { cwd: repo, encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["add", "--all"], { cwd: repo, encoding: "utf8" }).status, 0);
+    const commit = (message) => spawnSync("git", ["-c", "user.name=Context Test", "-c",
+      "user.email=context-test@example.invalid", "commit", "--quiet", "-m", message],
+    { cwd: repo, encoding: "utf8" });
+    assert.equal(commit("trusted verifier fixture").status, 0);
+    assert.equal(spawnSync("git", ["checkout", "-qb", "candidate"],
+      { cwd: repo, encoding: "utf8" }).status, 0);
+    writeFileSync(join(repo, "scripts/check-build-context.mjs"),
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`);
+    assert.equal(spawnSync("git", ["add", "--all"], { cwd: repo, encoding: "utf8" }).status, 0);
+    assert.equal(commit("untrusted source checker").status, 0);
+    const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" });
+    assert.equal(revision.status, 0, revision.stderr);
+    const sourceSha = revision.stdout.trim();
+    assert.equal(spawnSync("git", ["checkout", "main"],
+      { cwd: repo, encoding: "utf8" }).status, 0);
+
+    const archived = spawnSync("git", ["archive", "--format=tar", sourceSha],
+      { cwd: repo, maxBuffer: 64 * 1024 * 1024 });
+    assert.equal(archived.status, 0, archived.stderr);
+    const unpacked = spawnSync("tar", ["-xf", "-", "-C", extracted],
+      { cwd: repo, input: archived.stdout, encoding: "utf8" });
+    assert.equal(unpacked.status, 0, unpacked.stderr);
+    const checked = spawnSync(process.execPath, [join(repo, "scripts/check-build-context.mjs"),
+      "--context", extracted, "--dockerfile", "Dockerfile", "--output", receipt],
+    { cwd: repo, encoding: "utf8" });
+    assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`);
+    const context = JSON.parse(readFileSync(receipt, "utf8"));
+    assert.equal(await verifySourceContext({ source_sha: sourceSha,
+      build_context_sha256: `sha256:${context.contextHash}` }, repo), true);
+    assert.equal(readFileSync(join(extracted, "scripts/check-build-context.mjs"), "utf8")
+      .includes("candidate-checker-executed"), true);
+    assert.equal((await import("node:fs")).existsSync(marker), false,
+      "the checker embedded in the source archive must remain data");
+  } finally {
+    const base = resolve(tmpdir());
+    const target = resolve(tempRoot);
+    const rel = relative(base, target);
+    assert.ok(rel && rel !== "." && !rel.startsWith("..") && !isAbsolute(rel),
+      "temporary trust fixture must remain below the OS temp directory");
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test("TestRejectSecretBuildArg", () => {
   const errs = rejects((m) => { m.build_args = { TELEGRAM_BOT_TOKEN: "x".repeat(30) }; });
   assert.ok(errs.some((e) => /secret/.test(e)), errs.join("|"));
