@@ -71,6 +71,7 @@ jobs:
           && go test -count=1 -race -p 1 -tags=integration
           ./internal/auth/ ./internal/engine/ ./internal/incident/
           ./internal/monitor/ ./internal/notification/ ./internal/admin/
+          ./internal/analytics/
         env:
           PGPASS: postgres
 
