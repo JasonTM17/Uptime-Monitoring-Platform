@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/checker"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/incident"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/monitor"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -280,6 +282,94 @@ func TestMonitorMutations(t *testing.T) {
 			t.Fatalf("re-delete %d", rec.Code)
 		}
 	})
+}
+
+func TestPatchDownMonitorCanOpenAnotherIncident(t *testing.T) {
+	f := newMonFixture(t)
+	defer f.cleanup()
+	a := f.newClient()
+	a.join(f.email("patch-down"))
+	m := a.create("outage")
+	id := m["id"].(string)
+	ctx := context.Background()
+	segID, runID, incidentID := uuid.New(), uuid.New(), uuid.New()
+	// These retained evidence rows must leave before the fixture deletes its
+	// monitor. The checks use real FK anchors rather than an impossible incident.
+	defer func() {
+		_, _ = f.pool.Exec(ctx, `DELETE FROM uptime.incidents WHERE monitor_id=$1`, id)
+		_, _ = f.pool.Exec(ctx, `DELETE FROM uptime.check_runs WHERE monitor_id=$1`, id)
+		_, _ = f.pool.Exec(ctx, `DELETE FROM uptime.schedule_segments WHERE monitor_id=$1`, id)
+	}()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO uptime.schedule_segments(id,monitor_id,generation,starts_at,interval_seconds)
+		  VALUES ($1,$2,1,now(),60)`, []any{segID, id}},
+		{`INSERT INTO uptime.check_runs(id,monitor_id,segment_id,slot_at,generation,sequence,engine_epoch,status)
+		  VALUES ($1,$2,$3,now(),1,1,1,'COMPLETED')`, []any{runID, id, segID}},
+		{`INSERT INTO uptime.incidents(id,monitor_id,opened_check_id,opened_at)
+		  VALUES ($1,$2,$3,now())`, []any{incidentID, id, runID}},
+		{`UPDATE uptime.monitors SET health='DOWN',failure_streak=0,success_streak=1 WHERE id=$1`, []any{id}},
+	} {
+		if _, err := f.pool.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := a.do(http.MethodPatch, "/monitors/"+id,
+		`{"expected_generation":1,"target_url":"https://example.org"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch %d %s", rec.Code, rec.Body.String())
+	}
+	var reason, health string
+	var fs, ss int
+	if err := f.pool.QueryRow(ctx, `SELECT close_reason FROM uptime.incidents WHERE id=$1`,
+		incidentID).Scan(&reason); err != nil || reason != "CONFIG_CHANGED" {
+		t.Fatalf("incident closure reason=%s err=%v", reason, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT health,failure_streak,success_streak
+		FROM uptime.monitors WHERE id=$1`, id).Scan(&health, &fs, &ss); err != nil {
+		t.Fatal(err)
+	}
+	if health != "UNKNOWN" || fs != 0 || ss != 0 {
+		t.Errorf("closed incident left stale health=%s failure=%d success=%d", health, fs, ss)
+	}
+	state := incident.State{Health: incident.HealthUnknown, FailureStreak: fs, SuccessStreak: ss}
+	if health == "DOWN" {
+		state.Health = incident.HealthDown
+	}
+	var tr incident.Transition
+	for range incident.FailThreshold {
+		state, tr = incident.Reduce(state, checker.Observation{Outcome: checker.OutcomeTimeout})
+	}
+	if tr.Effect != incident.EffectIncidentOpened {
+		t.Fatalf("continued outage cannot open another incident: effect=%s health=%s", tr.Effect, state.Health)
+	}
+}
+
+func TestPatchPreservesUpFailureStreak(t *testing.T) {
+	f := newMonFixture(t)
+	defer f.cleanup()
+	a := f.newClient()
+	a.join(f.email("patch-up"))
+	id := a.create("progress")["id"].(string)
+	if _, err := f.pool.Exec(context.Background(), `UPDATE uptime.monitors
+		SET health='UP',failure_streak=2,success_streak=0 WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(http.MethodPatch, "/monitors/"+id, `{"expected_generation":1,"name":"renamed"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch %d %s", rec.Code, rec.Body.String())
+	}
+	var health string
+	var failures int
+	if err := f.pool.QueryRow(context.Background(), `SELECT health,failure_streak
+		FROM uptime.monitors WHERE id=$1`, id).Scan(&health, &failures); err != nil {
+		t.Fatal(err)
+	}
+	if health != "UP" || failures != 2 {
+		t.Fatalf("edit erased pending outage evidence: health=%s failures=%d", health, failures)
+	}
 }
 
 func TestConcurrentPatch(t *testing.T) {
