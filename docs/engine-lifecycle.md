@@ -37,7 +37,7 @@ SelectDue (bounded, next_check_at <= now, no active run, not paused/deleted)
 | Crash after reservation commit, before attempt | Run reconciled to `INTERRUPTED` at takeover; schedule NOT rewound; no fabricated result/incident/outbox; next reservation continues the sequence — no catch-up replay. |
 | Result arrives after engine takeover | Epoch fence: run `STALE`, zero durable effect. |
 | Result arrives after pause/edit/delete/owner-disable | Generation/tombstone/owner fence: run `STALE`, monitor state and schedule untouched. |
-| Admin mutation while an incident is open (edit, pause, delete) | The mutation closes the incident in the same transaction with an honest reason (`CONFIG_CHANGED`/`DELETED`), never as observed recovery. Health stays whatever evidence last proved (e.g., DOWN): continued failures do not reopen an incident (no new transition), and a later recovery resolves silently � by design, an administrative change voids the old incident's evidence chain, so recovery notification after a config change would be noise. |
+| Lifecycle/configuration mutation while an incident is open | Close it in the same transaction as CONFIG_CHANGED or DELETED, never as observed recovery. Editing a DOWN monitor or resuming it after pause resets stale DOWN/streaks to UNKNOWN so new failures can establish another incident. Non-DOWN streaks are preserved; pause alone does not fabricate a health observation. See [mutation regressions](../internal/monitor/mutations_integration_test.go). |
 | Queue full | Due monitors stay in the database; nothing is reserved, nothing is lost. Retained work is admitted when capacity returns, exactly once. |
 | Job waits in queue longer than its timeout | Attempt still gets its full configured budget — queue delay cannot produce a failure outcome, an incident, or an outbox intent. A genuinely slow target still produces an eligible `TIMEOUT`. |
 | Cancel before attempt | Zero network I/O, no observation; the reservation stays `RESERVED` and recoverable. |
@@ -51,7 +51,7 @@ for the rest of the epoch; the next owner's `ReconcileInterrupted`
 still reaps it. Liveness was chosen over a retry loop on the
 best-effort path. Similarly, an owner that fails to acquire within
 the bounded try-lock window leaves the process serving traffic with
-no engine � start-time overlap is an operations concern, not a state
+no engine — start-time overlap is an operations concern, not a state
 risk.
 
 ## Invariants
@@ -64,7 +64,7 @@ risk.
   moves health and streaks. Collector-side exclusions reset streaks
   but never move health or open incidents.
 - No network I/O inside a database transaction; no Telegram/network
-  delivery inside finalize (outbox intents only — Phase 06 dispatches).
+  delivery inside finalize; the dispatcher consumes committed outbox intents.
 - Lock order everywhere: owner user row -> quota/monitor -> run. A
   mutation and a finalize serialize on those rows; whichever commits
   first wins, the loser is fenced.

@@ -6,6 +6,40 @@ answer them. It complements the [business rules](../business-rules.md),
 The failure cases below are expected outcomes and test entry points, not a
 claim that every production environment has been exercised.
 
+## System overview
+
+![Logical architecture with a single Go application, PostgreSQL data authority, browser and operator entry points, public check targets and Telegram delivery.](diagrams/system-overview.svg)
+
+[Full-size PNG](diagrams/system-overview.png) · [Editable SVG](diagrams/system-overview.svg)
+
+The dashed application boundary groups components of one process. Green arrows
+are database operations; the outbox is durable PostgreSQL state, not a separate
+message broker. The browser and operator CLI have distinct authority. Telegram
+delivery is conditional on configuration; external services are logical
+dependencies, not proof of a deployed environment.
+
+## Observation and delivery flow
+
+![An incident transition with eligible bound recipients creates outbox intents during atomic finalization; only those intents enter leasing, recipient/rate checks, optional provider send and disposition after commit.](diagrams/observation-delivery-flow.svg)
+
+[Full-size PNG](diagrams/observation-delivery-flow.png) · [Editable SVG](diagrams/observation-delivery-flow.svg)
+
+The diagram follows the alert-producing path from left to right. Ordinary
+unchanged-health observations stop after result/state finalization. A real
+incident-open/recovered effect appends intents only for eligible bound channels;
+no transition or no eligible recipients means no intent to dispatch. Recipient
+rejection or rate-limit deferral can bypass the provider call. Only eligible retries/expired leases
+return to the delivery loop; terminal rows do not automatically restart. ACK
+loss can cause a duplicate provider send. A RECOVERY remains behind its DOWN
+predecessor, with the [delivery runbook](../runbooks/notification-delivery.md)
+owning exact retry and suppression rules.
+
+These diagrams are self-contained source illustrations with PNG exports, not
+runtime screenshots. Update the editable SVG alongside its PNG when boundaries
+change. Component wiring is owned by [cmd/api](../../cmd/api/main.go),
+[finalization](../../internal/engine/finalize.go) and the
+[dispatcher](../../internal/notification/dispatcher.go).
+
 ## Architecture questions and answers
 
 | Question | Decision and trade-off | Owning contract |
