@@ -3,6 +3,7 @@
 Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, vận hành, bảo mật, kiểm thử và phát hành. Trang release chỉ ghi nhận trạng thái phân phối sau khi các registry được kiểm chứng.
 
 - [Bắt đầu chạy dự án](../README.md#quick-start) · [Tóm tắt tiếng Việt](readme-vi.md)
+- [Hướng dẫn sử dụng](user-guide.md): tài khoản → monitor → incident/thống kê → Telegram → phiên/quản trị, kèm xử lý lỗi.
 
 ## Public docs
 
@@ -11,7 +12,7 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
   `planned`/`x-future` là contract drafts, chưa tồn tại ở runtime.
 - [Product requirements và scope traceability](product-requirements.md):
   Must/non-goals và các yêu cầu R01–R24.
-- [Business rules and implementation map](business-rules.md): actors, incident transitions and links to their source and tests.
+- [Business rules and implementation map](business-rules.md): identity, ownership, quota, transitions, retry, statistics, retention and administrative recovery, with source/test owners.
 - [Toolchain pins và compatibility](toolchain.md): pinned versions, local
   drift, prerequisites Windows/Linux.
 - [Runbook: local và test databases](runbooks/local-database.md):
@@ -33,6 +34,7 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
   partition, raw+hourly merge, represented-window contract.
 - [Database design](architecture/database.md): ERD, table inventory và
   schema-level invariants của schema `uptime` (dẫn từ `migrations/`).
+- [System design and failure cases](architecture/system-design.md): architecture review answers, trust boundaries, twenty failure scenarios and a source/test learning route.
 - [SSRF boundary](security/ssrf-boundary.md) and [RBAC matrix](security/rbac-matrix.md): outbound network and authorization boundaries.
 - [Frontend testing](testing/frontend.md): browser and UI verification.
 - [Container release policy](releases/container-policy.md): image identity,
@@ -54,7 +56,7 @@ Tài liệu được nhóm theo API, kiến trúc, triển khai, thiết kế, v
 | Thư mục | Nội dung |
 |---|---|
 | `api/` | OpenAPI contract |
-| `architecture/` | Database và thống kê |
+| `architecture/` | System decisions/failure cases, database và thống kê |
 | `deployment/` | Candidate deployment guides and budgets |
 | `design/` | UI decisions, inventories, and design handoff |
 | `media/` | Product screenshots and demo assets |

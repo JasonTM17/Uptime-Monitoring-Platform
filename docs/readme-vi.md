@@ -32,3 +32,9 @@ publish và [tài liệu triển khai](deployment/) cho các hướng dẫn host
 
 Xem [hướng dẫn bắt đầu nhanh](../README.md#quick-start),
 [database local](runbooks/local-database.md) và [vận hành](runbooks/local-operations.md).
+
+## Sử dụng và hiểu nghiệp vụ
+
+- [Hướng dẫn sử dụng](user-guide.md): luồng từ tài khoản mới đến xử lý cảnh báo, quota và phiên.
+- [Quy tắc nghiệp vụ](business-rules.md): trạng thái, điều kiện cho phép/từ chối và nguồn kiểm chứng.
+- [Yêu cầu và phạm vi thực tế](product-requirements.md): phần đã có, thao tác operator và phần chưa được xác minh.

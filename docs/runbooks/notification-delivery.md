@@ -49,7 +49,14 @@ recorded honestly, never a fabricated send.
 | DEAD | permanent rejection or retry/age budget exhausted — blocks descendants |
 | SUPPRESSED | authorized skip (ineligible recipient or operator action); cascades to children |
 
-## Operator controls (internal services — no public route yet)
+## Authorized controls
+
+The admin HTTP surface provides retry/suppress under explicit delivery
+permissions, recent-auth, version/idempotency checks and transactional audit.
+See [RBAC](../security/rbac-matrix.md),
+[admin operations](../../internal/admin/operations.go) and
+[OpenAPI](../api/openapi.yaml). Internal service methods do not grant HTTP
+authorization by themselves.
 
 - **RetryDeadHead(id, version)** — reset the attempt window on a
   DEAD *stream head* only: same event identity, fresh budget.
@@ -66,6 +73,14 @@ recorded honestly, never a fabricated send.
   bounded global outstanding set. The dispatcher delivers it through
   the normal claim path.
 
+Owner HTTP test-send requires CSRF and recent-auth. Its actor/session recheck,
+recent-auth read and intent insertion share a transaction; rejection/rollback
+cannot leave an intent. See [test handler](../../internal/notification/test_handler.go)
+and [denial/rollback tests](../../internal/notification/test_handler_integration_test.go).
+The standalone queue method is for trusted internal callers. 202 means queued;
+a cooldown repeat normally returns 429, while a logical duplicate may return
+200 without creating another intent.
+
 ## Reading the queue
 
 `ListDeliveries(owner, limit)` returns the redacted owner-scoped
@@ -80,11 +95,15 @@ Common states to act on:
 - `DEAD` + `RETRY_EXHAUSTED` — budget spent; check provider health
   before retrying.
 - `LEASED` older than its expiry — the attempt's outcome is unknown;
-  ReclaimExpired returns it to PENDING automatically.
+  ReclaimExpired returns it to PENDING or marks it DEAD when its budget is spent.
 - `PENDING` behind a DEAD predecessor — causal block; resolve the
   head (retry or suppress) rather than touching the descendant.
 
 ## Channel lifecycle (cmd/channel)
+
+Owners create labels only. Pending allocation includes tombstoned pending rows;
+deleting an unverified channel does not free that pending limit. Verification
+and key operations belong to the operator.
 
 - `channel verify -channel <uuid> -owner <uuid> -receipt <ref>` —
   reads the chat ID on **stdin only**, seals it AAD-bound to
