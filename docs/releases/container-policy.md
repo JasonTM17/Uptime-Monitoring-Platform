@@ -85,6 +85,9 @@ paths, usernames, or credentials in labels/args/history.
 - `container-build` is a manual, secretless workflow on protected `main`.
   It receives `contents: read`, validates that the release tag points at the
   exact source SHA, and has no registry credentials or package-write access.
+  The job enables and asserts the containerd image store on its disposable
+  runner's existing Docker daemon. The build CLI and image scanner share
+  `/var/run/docker.sock`, preserving their image-index and attestation binding.
 - `container-publish` runs only after a successful `container-build` on
   `main`. It checks out publisher code from the default branch, downloads the
   artifact from that exact run, binds the event, artifact, tag, and successful
