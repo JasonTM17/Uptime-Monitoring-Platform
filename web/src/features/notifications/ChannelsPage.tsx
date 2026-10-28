@@ -29,7 +29,7 @@ function allocationMessage(e: ApiError): string | null {
   if (e.status !== 409 || e.code !== "ALLOCATION_LIMIT_REACHED") return null;
   const scope = e.fields?.scope;
   return scope === "pending_channels"
-    ? "Pending channel limit reached — wait for verification or delete an unused pending channel."
+    ? "Pending channel limit reached — contact an operator to resolve verification. Deleting pending channels does not free this limit."
     : "Channel allocation limit reached for this account.";
 }
 
