@@ -956,7 +956,7 @@ export interface components {
             request_id: string;
         };
         /** @enum {string} */
-        ErrorCode: "BAD_REQUEST" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_REJECTED" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "CONFLICT" | "QUOTA_EXCEEDED" | "ALLOCATION_LIMIT_REACHED" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "VALIDATION_ERROR" | "RATE_LIMITED" | "REAUTH_REQUIRED" | "INTERNAL_ERROR" | "UNAVAILABLE";
+        ErrorCode: "BAD_REQUEST" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_REJECTED" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "CONFLICT" | "QUOTA_EXCEEDED" | "ALLOCATION_LIMIT_REACHED" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "VALIDATION_ERROR" | "RATE_LIMITED" | "REAUTH_REQUIRED" | "LAST_SUPERADMIN" | "INTERNAL_ERROR" | "UNAVAILABLE";
         HealthStatus: {
             /** @enum {string} */
             status: "ok" | "ready" | "unavailable";
@@ -3034,7 +3034,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Invalid cursor */
+            /** @description Invalid cursor, filter, or >90d window */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3673,7 +3673,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["AdminForbidden"];
             404: components["responses"]["NotFound"];
-            /** @description Not DEAD */
+            /** @description Not DEAD, stale version, or live predecessor */
             409: {
                 headers: {
                     [name: string]: unknown;
