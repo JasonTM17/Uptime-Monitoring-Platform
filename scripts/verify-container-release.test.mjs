@@ -522,6 +522,111 @@ test("rejects OCI config labels that disagree with the manifest", () => {
   }
 });
 
+test("accepts BuildKit attestation descriptor reference annotation in oci-chain", () => {
+  const dir = mkdtempSync(join(ROOT, ".verifier-oci-buildkit-test-"));
+  const layout = join(dir, "layout");
+  const archive = join(dir, "uptime-platform-buildkit.oci.tar");
+  const manifestPath = join(dir, "manifest.json");
+  const output = join(dir, "verification.json");
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const writeBlob = (digest, bytes) => {
+    const blobPath = join(layout, "blobs", "sha256", digest.slice("sha256:".length));
+    mkdirSync(dirname(blobPath), { recursive: true });
+    writeFileSync(blobPath, bytes);
+  };
+
+  try {
+    const m = base();
+    const layerBytes = Buffer.from("oci-layer-fixture");
+    const layerDigest = `sha256:${hash(layerBytes)}`;
+    const configBytes = Buffer.from(JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      config: { User: "65532:65532", Labels: m.labels },
+      rootfs: { type: "layers", diff_ids: [] },
+    }));
+    const configDigest = `sha256:${hash(configBytes)}`;
+    const imageManifestBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: { mediaType: "application/vnd.oci.image.config.v1+json",
+        digest: configDigest, size: configBytes.length },
+      layers: [{ mediaType: "application/vnd.oci.image.layer.v1.tar",
+        digest: layerDigest, size: layerBytes.length }],
+    }));
+    const imageDigest = `sha256:${hash(imageManifestBytes)}`;
+    // BuildKit emits attestation manifests without OCI 1.1 subject on the blob;
+    // the reference is bound via the descriptor's vnd.docker.reference.digest annotation.
+    const attestationBytes = Buffer.from(JSON.stringify({ schemaVersion: 2, layers: [] }));
+    const attestationDigest = `sha256:${hash(attestationBytes)}`;
+    const listBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      manifests: [
+        { mediaType: "application/vnd.oci.image.manifest.v1+json",
+          digest: imageDigest, size: imageManifestBytes.length,
+          platform: { architecture: "amd64", os: "linux" } },
+        { mediaType: "application/vnd.oci.image.manifest.v1+json",
+          digest: attestationDigest, size: attestationBytes.length,
+          annotations: {
+            "vnd.docker.reference.type": "attestation-manifest",
+            "vnd.docker.reference.digest": imageDigest,
+          } },
+      ],
+    }));
+    const listDigest = `sha256:${hash(listBytes)}`;
+    const indexBytes = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      manifests: [{ mediaType: "application/vnd.oci.image.index.v1+json",
+        digest: listDigest, size: listBytes.length }],
+    }));
+    mkdirSync(layout, { recursive: true });
+    writeFileSync(join(layout, "index.json"), indexBytes);
+    writeBlob(listDigest, listBytes);
+    writeBlob(imageDigest, imageManifestBytes);
+    writeBlob(attestationDigest, attestationBytes);
+    writeBlob(configDigest, configBytes);
+    writeBlob(layerDigest, layerBytes);
+
+    const archiveRelative = relative(ROOT, archive).replaceAll("\\", "/");
+    const packed = spawnSync("tar", ["-cf", archiveRelative, "-C", layout, "index.json", "blobs"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.ifError(packed.error);
+    assert.equal(packed.status, 0, packed.stderr);
+
+    m.image.index_digest = listDigest;
+    m.image.image_manifest_digest = imageDigest;
+    m.image.config_digest = configDigest;
+    m.image.attestation_digest = attestationDigest;
+    m.image.layer_digests = [layerDigest];
+    m.image.archive = archiveRelative;
+    m.image.archive_sha256 = `sha256:${hash(readFileSync(archive))}`;
+    m.scan.source_scanner.target.runtime_image_digest = listDigest;
+    m.sbom.subject_digest = listDigest;
+    m.provenance.subject_digest = listDigest;
+    writeFileSync(manifestPath, JSON.stringify(m));
+
+    const child = spawnSync(process.execPath, [SCRIPT,
+      "--manifest", manifestPath, "--output", output, "--stage", "local"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.ifError(child.error);
+    const receipt = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(receipt.checks.find((check) => check.name === "manifest-contract").ok, true);
+    assert.equal(receipt.checks.find((check) => check.name === "archive-integrity").ok, true);
+    const chain = receipt.checks.find((check) => check.name === "oci-chain");
+    assert.equal(chain.ok, true);
+    assert.match(chain.detail, /all hash-verified/);
+  } finally {
+    const relDir = relative(ROOT, resolve(dir));
+    assert.ok(relDir && relDir !== "." && !relDir.startsWith("..") && !isAbsolute(relDir),
+      "temporary OCI fixture must remain below the repository root");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("TestRejectMissingDBFreeLiveness", () => {
   const errs = rejects((m) => { m.smoke.live_db_free = false; });
   assert.ok(errs.some((e) => /live_db_free/.test(e)), errs.join("|"));

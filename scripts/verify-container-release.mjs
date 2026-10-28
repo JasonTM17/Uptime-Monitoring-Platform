@@ -353,7 +353,8 @@ async function main() {
         }
         const attBytes = (await cat(`blobs/${attD.digest.replace(":", "/")}`)).out;
         const att = JSON.parse(attBytes);
-        const attSubject = att.subject?.digest ?? att.subject?.[0]?.digest;
+        const attSubject = att.subject?.digest ?? att.subject?.[0]?.digest ??
+          attD.annotations?.["vnd.docker.reference.digest"];
         if (attSubject !== imgD.digest)
           problems.push(`attestation subject ${attSubject} != image manifest`);
         check("oci-chain", problems.length === 0,
@@ -451,7 +452,7 @@ async function main() {
   }
 
   writeFileSync(output, JSON.stringify(result, null, 2));
-  console.log(`verdict ${result.verdict} — ${result.checks.map((c) => `${c.name}:${c.ok ? "ok" : "FAIL"}`).join(", ")}`);
+  console.log(`verdict ${result.verdict} — ${result.checks.map((c) => `${c.name}:${c.ok ? "ok" : `FAIL(${c.detail})`}`).join(", ")}`);
   process.exit(result.verdict === "PASS" ? 0 : 1);
 }
 
