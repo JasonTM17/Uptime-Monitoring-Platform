@@ -167,10 +167,12 @@ test.describe("C79 lifecycle acceptance (real composed stack)", () => {
     expect(bind.status()).toBe(200);
 
     // Baseline UP through real engine + UI badge. The detail page
-    // polls on the product's 20s cadence — windows cover one full
-    // interval plus check latency.
+    // polls on the product's 20s cadence — the window covers one full
+    // interval plus check latency, with headroom for a seeded world
+    // still draining when --gate all runs this lane right after
+    // backend scenarios.
     await setMode("up");
-    await expect(page.getByText(/^UP$/).first()).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText(/^UP$/).first()).toBeVisible({ timeout: 90_000 });
 
     // 3 forced failures — threshold semantics are the product's.
     await setMode("down");
