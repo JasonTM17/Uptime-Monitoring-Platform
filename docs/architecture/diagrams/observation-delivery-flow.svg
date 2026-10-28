@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1040" viewBox="0 0 1440 1040" role="img" aria-labelledby="title description">
+<title id="title">Observation and notification flow</title>
+<desc id="description">The scheduler commits a reservation before bounded workers perform HTTP checks. Fenced finalization atomically records results, state, incidents and outbox intents. Only incident transitions with eligible bound recipients append outbox intents. Ordinary unchanged-health samples stop at result/state finalization. After commit, the dispatcher leases an actual intent, revalidates its recipient, applies rate limits, sends through Telegram and records the outcome. Only due retries or expired leases return to the delivery loop.</desc>
+<style>text{font-family:Arial,Helvetica,sans-serif}</style>
+<defs>
+<marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/></marker>
+<marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/></marker>
+<marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#9333ea"/></marker>
+</defs>
+<rect width="1440" height="1040" rx="18" fill="#ffffff"/>
+<text x="56" y="68" font-size="34" fill="#111827" font-weight="600" text-anchor="start">Observation and notification flow</text>
+<text x="56" y="106" font-size="18" fill="#6b7280" font-weight="400" text-anchor="start">Network calls stay outside database transactions; queued does not mean delivered</text>
+<rect x="720" y="146" width="688" height="230" rx="14" fill="#f6fcf8" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="744" y="169" font-size="12" fill="#16a34a" font-weight="600" text-anchor="start">ONE FINALIZATION TRANSACTION</text>
+<path d="M320,246 H400" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M664,246 H744" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1008,246 H1088" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M1236,312 V404 H188 V508" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<path d="M320,574 H400" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M664,574 H744" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1008,574 H1088" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1236,640 V776 H188 V640" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<path d="M532,640 V704 H1152 V640" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<rect x="56" y="180" width="264" height="132" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="74" y="204" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">01 · SCHEDULER</text>
+<text x="74" y="229" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Reserve a slot</text>
+<text x="74" y="256" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Quota + active-run fences</text>
+<text x="74" y="279" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Advance durable schedule</text>
+<rect x="400" y="180" width="264" height="132" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="418" y="204" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">02 · NETWORK</text>
+<text x="418" y="229" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Bounded workers</text>
+<text x="418" y="256" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Public HTTP(S) checks</text>
+<text x="418" y="279" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Dial policy + fresh timeout</text>
+<rect x="744" y="180" width="264" height="132" rx="10" fill="#ffffff" stroke="#86b99a" stroke-width="1.5"/>
+<text x="762" y="204" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">03 · ATOMIC WRITE</text>
+<text x="762" y="229" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Fenced finalization</text>
+<text x="762" y="256" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Result · health · incident</text>
+<text x="762" y="279" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Current epoch / generation</text>
+<rect x="1088" y="180" width="296" height="132" rx="10" fill="#ffffff" stroke="#86b99a" stroke-width="1.5"/>
+<text x="1106" y="204" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">04 · DURABLE INTENT</text>
+<text x="1106" y="229" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Outbox, if needed</text>
+<text x="1106" y="256" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Incident transitions only</text>
+<text x="1106" y="279" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Eligible bound channels</text>
+<rect x="56" y="508" width="264" height="132" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="74" y="532" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">05 · DISPATCHER</text>
+<text x="74" y="557" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Claim a lease</text>
+<text x="74" y="584" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Due intent + causal gate</text>
+<text x="74" y="607" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Stale-token fencing</text>
+<rect x="400" y="508" width="264" height="132" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="418" y="532" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">06 · SEND GATE</text>
+<text x="418" y="557" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Check eligibility</text>
+<text x="418" y="584" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Recipient + rate-limit gates</text>
+<text x="418" y="607" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Only admitted sends proceed</text>
+<rect x="744" y="508" width="264" height="132" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="762" y="532" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">07 · NETWORK</text>
+<text x="762" y="557" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Send to Telegram</text>
+<text x="762" y="584" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Bounded provider call</text>
+<text x="762" y="607" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">ACK loss can be ambiguous</text>
+<rect x="1088" y="508" width="296" height="132" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="1106" y="532" font-size="12" fill="#6b7280" font-weight="600" text-anchor="start">08 · FENCED DISPOSITION</text>
+<text x="1106" y="557" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Record outcome</text>
+<text x="1106" y="584" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">SENT / PENDING</text>
+<text x="1106" y="607" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">DEAD / SUPPRESSED</text>
+<rect x="341.3" y="212" width="37.4" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="360" y="230" font-size="12" fill="#2563eb" font-weight="500" text-anchor="middle">job</text>
+<rect x="675.6" y="212" width="56.9" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="704" y="230" font-size="12" fill="#2563eb" font-weight="500" text-anchor="middle">result</text>
+<rect x="1019.6" y="212" width="56.9" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1048" y="230" font-size="12" fill="#16a34a" font-weight="500" text-anchor="middle">if any</text>
+<text x="744" y="350" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">No transition or no eligible recipient: no intent</text>
+<rect x="665.6" y="387" width="108.7" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="720" y="405" font-size="14" fill="#9333ea" font-weight="500" text-anchor="middle">after commit</text>
+<rect x="334.8" y="540" width="50.4" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="360" y="558" font-size="12" fill="#2563eb" font-weight="500" text-anchor="middle">lease</text>
+<rect x="672.3" y="540" width="63.4" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="704" y="558" font-size="12" fill="#2563eb" font-weight="500" text-anchor="middle">allowed</text>
+<rect x="1019.6" y="540" width="56.9" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1048" y="558" font-size="12" fill="#2563eb" font-weight="500" text-anchor="middle">record</text>
+<rect x="654.3" y="759" width="131.4" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="720" y="777" font-size="14" fill="#9333ea" font-weight="500" text-anchor="middle">retry / reclaim</text>
+<rect x="787.6" y="687" width="108.7" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="842" y="705" font-size="14" fill="#9333ea" font-weight="500" text-anchor="middle">skip / defer</text>
+<rect x="56" y="854" width="400" height="100" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="74" y="888" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Fences prevent stale writes</text>
+<text x="74" y="915" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Old epoch / generation is rejected</text>
+<text x="74" y="938" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">No accepted health change</text>
+<rect x="488" y="854" width="400" height="100" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="506" y="888" font-size="21" fill="#111827" font-weight="600" text-anchor="start">At-least-once delivery</text>
+<text x="506" y="915" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Lost ACK can duplicate a send</text>
+<text x="506" y="938" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">No exactly-once claim</text>
+<rect x="920" y="854" width="464" height="100" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="938" y="888" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Causal order is preserved</text>
+<text x="938" y="915" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">RECOVERY follows SENT DOWN</text>
+<text x="938" y="938" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">DEAD blocks; suppression cascades</text>
+<path d="M56,1003 H100" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<text x="114" y="1008" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">HTTP / ordered step</text>
+<path d="M424,1003 H468" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<text x="482" y="1008" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Database operation</text>
+<path d="M810,1003 H854" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<text x="868" y="1008" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Asynchronous delivery / retry</text>
+</svg>

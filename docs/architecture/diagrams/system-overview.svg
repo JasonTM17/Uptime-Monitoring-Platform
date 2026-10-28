@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1080" viewBox="0 0 1440 1080" role="img" aria-labelledby="title description">
+<title id="title">System architecture</title>
+<desc id="description">A React browser client calls one Go application. API, scheduler/workers, observation writer, dispatcher and maintenance share PostgreSQL. The durable outbox is a database table. Workers check public HTTP(S) targets; the configured dispatcher sends through Telegram. Operator CLIs have separate direct database authority.</desc>
+<style>text{font-family:Arial,Helvetica,sans-serif}</style>
+<defs>
+<marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/></marker>
+<marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/></marker>
+<marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 10 3.5, 0 7" fill="#9333ea"/></marker>
+</defs>
+<rect width="1440" height="1080" rx="18" fill="#ffffff"/>
+<text x="56" y="68" font-size="34" fill="#111827" font-weight="600" text-anchor="start">System architecture</text>
+<text x="56" y="106" font-size="18" fill="#6b7280" font-weight="400" text-anchor="start">One Go application · PostgreSQL is the durable authority</text>
+<text x="56" y="176" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">CLIENTS AND LOCAL AUTHORITY</text>
+<text x="392" y="185" font-size="14" fill="#2563eb" font-weight="600" text-anchor="start">GO APPLICATION</text>
+<text x="1120" y="176" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">EXTERNAL NETWORK</text>
+<rect x="360" y="152" width="680" height="570" rx="14" fill="#f8fbff" stroke="#bfdbfe" stroke-width="1.5" stroke-dasharray="8 5"/>
+<rect x="430.1" y="168" width="123.8" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="492" y="186" font-size="14" fill="#2563eb" font-weight="500" text-anchor="middle">GO APPLICATION</text>
+<rect x="360" y="780" width="680" height="210" rx="14" fill="#f6fcf8" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="700" y="810" font-size="13" fill="#16a34a" font-weight="600" text-anchor="middle">PERSISTENT DATA</text>
+<path d="M392,304 H336 V892 H392" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M1008,302 H1072 V884 H1008" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M1008,444 H1056 V932 H1008" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M506,672 V830" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M856,672 V828" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M296,722 H312 V936 H392" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<path d="M296,272 H392" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1008,272 H1120" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M856,328 V388" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M506,560 V532 H1049 Q1056,519 1063,532 H1065 Q1072,519 1079,532 H1252 V560" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<rect x="56" y="216" width="240" height="112" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="74" y="250" font-size="21" fill="#111827" font-weight="600" text-anchor="start">React dashboard</text>
+<text x="74" y="277" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Owners + administrators</text>
+<text x="74" y="300" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Vite · TypeScript</text>
+<rect x="56" y="666" width="240" height="112" rx="10" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="74" y="700" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Operator CLI</text>
+<text x="74" y="727" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Bootstrap / recovery</text>
+<text x="74" y="750" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Recipient verification</text>
+<rect x="392" y="216" width="230" height="112" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="410" y="250" font-size="21" fill="#111827" font-weight="600" text-anchor="start">HTTP API</text>
+<text x="410" y="277" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Session · CSRF · RBAC</text>
+<text x="410" y="300" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Owner-scoped endpoints</text>
+<rect x="704" y="216" width="304" height="112" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="722" y="250" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Scheduler + workers</text>
+<text x="722" y="277" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">DB-backed admission</text>
+<text x="722" y="300" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Bounded queue + HTTP checks</text>
+<rect x="704" y="388" width="304" height="112" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="722" y="422" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Observation writer</text>
+<text x="722" y="449" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Epoch + generation fences</text>
+<text x="722" y="472" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Atomic result / incident / intent</text>
+<rect x="392" y="560" width="230" height="112" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="410" y="594" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Dispatcher</text>
+<text x="410" y="621" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Lease + recipient check</text>
+<text x="410" y="644" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Rate limit + retry</text>
+<rect x="704" y="560" width="304" height="112" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="722" y="594" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Maintenance</text>
+<text x="722" y="621" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Rollup · retention · reclaim</text>
+<text x="722" y="644" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Bounded background work</text>
+<rect x="1120" y="216" width="264" height="112" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="1138" y="250" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Public targets</text>
+<text x="1138" y="277" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">HTTP(S) GET, no redirects</text>
+<text x="1138" y="300" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Dial-time SSRF policy</text>
+<rect x="1120" y="560" width="264" height="112" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="1138" y="594" font-size="21" fill="#111827" font-weight="600" text-anchor="start">Telegram Bot API</text>
+<text x="1138" y="621" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Verified recipients only</text>
+<text x="1138" y="644" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Delivery when configured</text>
+<path d="M392,848 C392,819 1008,819 1008,848 V936 C1008,965 392,965 392,936 Z" fill="#ffffff" stroke="#86b99a" stroke-width="1.7"/>
+<path d="M392,848 C392,877 1008,877 1008,848" fill="none" stroke="#86b99a" stroke-width="1.3"/>
+<text x="700" y="890" font-size="24" fill="#111827" font-weight="600" text-anchor="middle">PostgreSQL</text>
+<text x="700" y="917" font-size="16" fill="#6b7280" font-weight="400" text-anchor="middle">Identity + resources · runs + results · incidents</text>
+<text x="700" y="942" font-size="16" fill="#6b7280" font-weight="400" text-anchor="middle">Durable outbox · hourly aggregates · audit</text>
+<rect x="306.9" y="236" width="74.2" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="344" y="254" font-size="13" fill="#2563eb" font-weight="500" text-anchor="middle">JSON API</text>
+<rect x="1030.4" y="236" width="67.1" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1064" y="254" font-size="13" fill="#2563eb" font-weight="500" text-anchor="middle">HTTP(S)</text>
+<rect x="808.4" y="344" width="95.2" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="856" y="362" font-size="13" fill="#2563eb" font-weight="500" text-anchor="middle">observation</text>
+<rect x="305.9" y="461" width="60.1" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="336" y="479" font-size="13" fill="#16a34a" font-weight="500" text-anchor="middle">DB I/O</text>
+<rect x="1017.4" y="711" width="109.3" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1072" y="729" font-size="13" fill="#16a34a" font-weight="500" text-anchor="middle">reserve slots</text>
+<rect x="1001.4" y="681" width="109.3" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1056" y="699" font-size="13" fill="#16a34a" font-weight="500" text-anchor="middle">atomic commit</text>
+<rect x="1139.9" y="497" width="88.2" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="1184" y="515" font-size="13" fill="#9333ea" font-weight="500" text-anchor="middle">async send</text>
+<rect x="430.3" y="726" width="151.4" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="506" y="744" font-size="13" fill="#16a34a" font-weight="500" text-anchor="middle">claim / disposition</text>
+<rect x="787.3" y="726" width="137.3" height="26" rx="5" fill="#ffffff" opacity=".97"/>
+<text x="856" y="744" font-size="13" fill="#16a34a" font-weight="500" text-anchor="middle">aggregate / purge</text>
+<text x="56" y="818" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">Operator access is separate</text>
+<text x="56" y="841" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">from browser permissions.</text>
+<path d="M56,1031 H100" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<text x="114" y="1036" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">HTTP / ordered step</text>
+<path d="M424,1031 H468" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<text x="482" y="1036" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Database operation</text>
+<path d="M810,1031 H854" fill="none" stroke="#9333ea" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-purple)" stroke-dasharray="7 5"/>
+<text x="868" y="1036" font-size="16" fill="#6b7280" font-weight="400" text-anchor="start">Asynchronous delivery / retry</text>
+</svg>

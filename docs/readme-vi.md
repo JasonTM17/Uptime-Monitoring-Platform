@@ -38,3 +38,12 @@ Xem [hướng dẫn bắt đầu nhanh](../README.md#quick-start),
 - [Hướng dẫn sử dụng](user-guide.md): luồng từ tài khoản mới đến xử lý cảnh báo, quota và phiên.
 - [Quy tắc nghiệp vụ](business-rules.md): trạng thái, điều kiện cho phép/từ chối và nguồn kiểm chứng.
 - [Yêu cầu và phạm vi thực tế](product-requirements.md): phần đã có, thao tác operator và phần chưa được xác minh.
+
+## Kiến trúc
+
+![Kiến trúc: React gọi một ứng dụng Go; API, engine, dispatcher và maintenance dùng PostgreSQL; checker gọi endpoint công khai và dispatcher gửi qua Telegram khi đã cấu hình.](architecture/diagrams/system-overview.svg)
+
+Xem [sơ đồ luồng kiểm tra và thông báo](architecture/system-design.md#observation-and-delivery-flow),
+[quyết định kiến trúc](architecture/system-design.md) và
+[ERD database](architecture/database.md). Đây là mô hình các thành phần trong
+code; không phải bằng chứng deployment hosted.

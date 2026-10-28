@@ -4,10 +4,15 @@
 [![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](docs/toolchain.md)
 [![PostgreSQL 17](https://img.shields.io/badge/postgresql-17-336791?logo=postgresql&logoColor=white)](docs/toolchain.md)
 [![React + TypeScript](https://img.shields.io/badge/react-typescript-61DAFB?logo=react&logoColor=white)](web/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-64748b)](LICENSE)
 
-A personal full-stack project for monitoring public HTTP(S) endpoints, tracking incidents and delivering alerts. It combines a Go API and worker engine, PostgreSQL storage, and a React dashboard.
+A full-stack platform for monitoring public HTTP(S) endpoints, tracking incidents and delivering Telegram alerts. A React dashboard sits above a Go API and bounded worker engine, with PostgreSQL as the durable authority.
 
-[Tiếng Việt](docs/readme-vi.md) · [Documentation](docs/README.md) · [API contract](docs/api/openapi.yaml) · [Release evidence](docs/releases/v0.1.0-evidence.md)
+[Tiếng Việt](docs/readme-vi.md) · [User guide](docs/user-guide.md) · [Architecture](#architecture) · [Documentation](docs/README.md) · [API](docs/api/openapi.yaml)
+
+[![Dashboard showing monitor health, sampled availability and recent incidents](docs/media/screenshots/dashboard-desktop.png)](docs/media/screenshots/dashboard-desktop.png)
+
+*Application capture from controlled local fixtures. See [media provenance](docs/media/manifest.json) and [release evidence](docs/releases/v0.1.0-evidence.md) for their separate verification boundaries.*
 
 ## What it does
 
@@ -53,31 +58,31 @@ Register a local account through the application. Administrative bootstrap and r
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  Browser[React dashboard] -->|"/api via proxy"| API[Go API]
-  API --> DB[(PostgreSQL)]
-  Engine[Scheduler and check workers] --> DB
-  Engine -->|"HTTP / HTTPS"| Targets[Public endpoints]
-  Engine --> Outbox[Notification outbox]
-  Outbox --> Telegram[Telegram]
-```
+![System architecture: React clients call one Go application; its API, engine, dispatcher and maintenance share PostgreSQL. Workers check public endpoints and the configured dispatcher sends to Telegram.](docs/architecture/diagrams/system-overview.svg)
 
-The API and engine run within the application. The [engine lifecycle](docs/engine-lifecycle.md) explains ownership and incident transitions; the [SSRF boundary](docs/security/ssrf-boundary.md) describes outbound checks. The [OpenAPI document](docs/api/openapi.yaml) distinguishes implemented operations from future contracts.
+The API, engine, dispatcher and maintenance loops belong to one Go application. The outbox is a PostgreSQL table; network checks and delivery run outside finalization transactions. The diagram describes components and trust boundaries, not a hosted deployment.
+
+[Open PNG](docs/architecture/diagrams/system-overview.png) · [Check-to-notification flow](docs/architecture/system-design.md#observation-and-delivery-flow) · [Architecture decisions](docs/architecture/system-design.md) · [Database ERD](docs/architecture/database.md)
+
+The [engine lifecycle](docs/engine-lifecycle.md) owns scheduling/finalization invariants, the [SSRF boundary](docs/security/ssrf-boundary.md) owns outbound policy, and [OpenAPI](docs/api/openapi.yaml) distinguishes implemented operations from future drafts.
 
 ## Start here
 
-- [Product requirements and scope](docs/product-requirements.md): user-facing requirements and non-goals.
-- [Business rules and implementation map](docs/business-rules.md): actors, incident transitions, notification boundaries and source links.
-- [Documentation index](docs/README.md): toolchain, runbooks, testing and operations docs.
-- [Toolchain pins](docs/toolchain.md) and the [local database runbook](docs/runbooks/local-database.md).
-- [Container release policy](docs/releases/container-policy.md) and [release evidence](docs/releases/v0.1.0-evidence.md).
+| Your goal | Read next |
+| --- | --- |
+| Use the application | [User guide](docs/user-guide.md) · [Tiếng Việt](docs/readme-vi.md) |
+| Understand scope and domain rules | [Requirements](docs/product-requirements.md) · [Business rules](docs/business-rules.md) |
+| Follow the architecture | [System design and flows](docs/architecture/system-design.md) · [Database](docs/architecture/database.md) |
+| Develop and verify | [Toolchain](docs/toolchain.md) · [Testing](docs/testing.md) · [Contributing](CONTRIBUTING.md) |
+| Operate or evaluate a release | [Runbooks](docs/README.md#operations) · [Release policy](docs/releases/container-policy.md) · [Verified image](docs/releases/v0.1.0-evidence.md) |
+
+The [documentation index](docs/README.md) is the complete route to setup, architecture, security, operations, testing and release material.
 
 ## Repository layout
 
 | Path | Responsibility |
 |---|---|
-| `cmd/` | API application entry point |
+| `cmd/` | Application, operator CLIs and isolated test composition entry points |
 | `internal/` | Backend domains, services, persistence, and adapters |
 | `web/` | React and TypeScript dashboard |
 | `migrations/` | PostgreSQL schema migrations |

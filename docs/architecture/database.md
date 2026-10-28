@@ -18,18 +18,22 @@ erDiagram
     notification_channels ||--o{ monitor_channels : ""
     monitors ||--o{ schedule_segments : "scheduled by"
     schedule_segments ||--o{ check_runs : "admits"
-    check_runs ||--|| check_results : "observes"
+    check_runs ||--o| check_results : "may produce"
     monitors ||--o{ incidents : "opens/closes via check_runs"
-    incidents ||--o{ notification_outbox : "notifies"
+    incidents |o--o{ notification_outbox : "TEST has no incident"
     monitors ||--o{ hourly_stats : "rolled up into"
     users ||--o{ user_roles : ""
     roles ||--o{ user_roles : ""
     roles ||--o{ role_permissions : ""
     permissions ||--o{ role_permissions : ""
-    users ||--o{ audit_events : "actor (nullable)"
+    users |o--o{ audit_events : "actor (CLI may be null)"
     users ||--o{ admin_idempotency : "actor"
     notification_outbox |o--o| notification_outbox : "recovery predecessor"
 ```
+
+A reserved/interrupted run may have no accepted result. TEST notification
+intents have no incident, and CLI audit events may have no user actor; the
+optional relationships above preserve those failure/operator boundaries.
 
 Singleton rows (one row, enforced by `CHECK(id=1)` / `id smallint
 PRIMARY KEY`):
