@@ -22,8 +22,10 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 const run = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const API = "http://localhost:18080";
-const CONTROL = "http://localhost:19080";
+const API_PORT = process.env.ACCEPT_API_PORT ?? "18080";
+const CONTROL_PORT = process.env.ACCEPT_CONTROL_PORT ?? "19080";
+const API = `http://localhost:${API_PORT}`;
+const CONTROL = `http://localhost:${CONTROL_PORT}`;
 const COMPOSE = ["compose", "-p", "uptime-accept", "-f", "compose.test.yaml"];
 
 // ---------- helpers ----------
