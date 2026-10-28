@@ -107,5 +107,5 @@ test("lint catches a broken $ref", async () => {
 test("manifest covers every production mux route (drift guard)", () => {
   // If a route is added to a mux without updating the manifest, this
   // count and the spec parity above go out of sync and fail loudly.
-  assert.equal(IMPLEMENTED_OPS.length, 22);
+  assert.equal(IMPLEMENTED_OPS.length, 49);
 });

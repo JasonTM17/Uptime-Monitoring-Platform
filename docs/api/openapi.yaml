@@ -358,6 +358,7 @@ paths:
                     error:
                       code: REAUTH_REQUIRED
                       message: recent authentication required
+                    request_id: "req_01H…"
 
   /monitors:
     post:
@@ -1235,7 +1236,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: '#/components/schemas/AdminAuditPage' }
-        '400': { description: Invalid cursor, filter, or >90d window }
+        '400': { description: "Invalid cursor, filter, or >90d window" }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '503': { description: Dependency unavailable }
@@ -1694,7 +1695,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/AdminForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: Not DEAD, stale version, or live predecessor }
+        '409': { description: "Not DEAD, stale version, or live predecessor" }
         '422': { $ref: '#/components/responses/ValidationFailed' }
 
   /admin/outbox/{id}/suppress:
@@ -1904,6 +1905,7 @@ components:
         - VALIDATION_ERROR
         - RATE_LIMITED
         - REAUTH_REQUIRED
+        - LAST_SUPERADMIN
         - INTERNAL_ERROR
         - UNAVAILABLE
     HealthStatus:
