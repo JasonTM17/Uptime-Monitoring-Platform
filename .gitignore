@@ -5,7 +5,7 @@
 /docs/private/
 /docs/internal/
 
-# Local AI adapters and session state; keep only the portable project config.
+# Local AI adapters, project configuration and session state stay private.
 .codex/
 .claude/
 .agents/
@@ -16,8 +16,11 @@
 .omp/
 .opencode/
 .dsh/
-.agentkit/*
-!.agentkit/config.yaml
+.agentkit/
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/OPENCODE.md
 
 # Secrets and local environments. Examples remain versionable.
 .env
