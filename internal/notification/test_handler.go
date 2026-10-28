@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/platform/httpserver"
@@ -18,6 +18,8 @@ import (
 // own-test route enforces before persisting a TEST intent.
 const recentAuthTTL = 5 * time.Minute
 
+var errRecentAuthRequired = errors.New("recent authentication required")
+
 // TestHandler exposes the owner-scoped channel test route: POST
 // /notification-channels/{id}/test queues ONE TEST intent for a
 // monitor the caller owns and the channel is bound to — 202 means
@@ -26,7 +28,6 @@ const recentAuthTTL = 5 * time.Minute
 // persist. Admin capabilities are a separate surface entirely.
 type TestHandler struct {
 	ops   *Operations
-	pool  *pgxpool.Pool
 	auth  AuthGate
 	csrf  *auth.CSRFManager
 	rate  TestRate
@@ -34,15 +35,14 @@ type TestHandler struct {
 	maxIn int64
 }
 
-// NewTestHandler wires the own-test route. The pool is needed for
-// the recent-auth gate read; Operations owns the intent tx.
-func NewTestHandler(ops *Operations, pool *pgxpool.Pool,
-	gate AuthGate, csrf *auth.CSRFManager, rate TestRate,
+// NewTestHandler wires the own-test route. The actor fence, recent-auth read
+// and intent write share the AuthGate transaction.
+func NewTestHandler(ops *Operations, gate AuthGate, csrf *auth.CSRFManager, rate TestRate,
 	maxBody int64, log *slog.Logger) *TestHandler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &TestHandler{ops: ops, pool: pool, auth: gate, csrf: csrf,
+	return &TestHandler{ops: ops, auth: gate, csrf: csrf,
 		rate: rate, log: log, maxIn: maxBody}
 }
 
@@ -80,21 +80,18 @@ type testInput struct {
 }
 
 // requireRecentAuth verifies the caller's own session carries a
-// recent password authentication inside the TTL — a gate read, not
-// a lock: the session was authenticated upstream and revocation
-// races are irrelevant to a read-only freshness check.
-func (h *TestHandler) requireRecentAuth(r *http.Request,
+// recent password authentication inside the TTL. WithActorLock already holds
+// the user and session locks, keeping this read and the intent in one fence.
+func (h *TestHandler) requireRecentAuth(ctx context.Context, tx pgx.Tx,
 	sessionID uuid.UUID) error {
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
 	var recent *time.Time
-	err := h.pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT recent_auth_at FROM uptime.sessions WHERE id=$1`,
 		sessionID).Scan(&recent)
 	if err != nil || recent == nil ||
 		time.Since(*recent) > recentAuthTTL ||
 		recent.After(time.Now().Add(time.Minute)) {
-		return errors.New("recent authentication required")
+		return errRecentAuthRequired
 	}
 	return nil
 }
@@ -117,13 +114,16 @@ func (h *TestHandler) test(w http.ResponseWriter, r *http.Request) {
 			httpserver.ErrBadRequest, "monitor_id required")
 		return
 	}
-	if err := h.requireRecentAuth(r, p.Session.ID); err != nil {
-		httpserver.WriteError(w, r, http.StatusForbidden,
-			httpserver.ErrReauth, "recent authentication required")
-		return
-	}
-	intentID, err := h.ops.QueueTestNotification(r.Context(),
-		p.User.ID, in.MonitorID, channelID, h.rate)
+	var intentID uuid.UUID
+	err = h.auth.WithActorLock(r.Context(), p, func(tx pgx.Tx, u auth.User) error {
+		if err := h.requireRecentAuth(r.Context(), tx, p.Session.ID); err != nil {
+			return err
+		}
+		var err error
+		intentID, err = h.ops.QueueTestNotificationTx(r.Context(), tx,
+			u.ID, in.MonitorID, channelID, h.rate)
+		return err
+	})
 	switch {
 	case err == nil:
 		httpserver.WriteJSON(w, r, http.StatusAccepted, map[string]any{
@@ -138,6 +138,12 @@ func (h *TestHandler) test(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrRateLimited):
 		httpserver.WriteError(w, r, http.StatusTooManyRequests,
 			httpserver.ErrRateLimited, "test notification rate limit")
+	case errors.Is(err, auth.ErrInvalidSession), errors.Is(err, auth.ErrNotFound):
+		httpserver.WriteError(w, r, http.StatusUnauthorized,
+			httpserver.ErrUnauth, "authentication required")
+	case errors.Is(err, errRecentAuthRequired):
+		httpserver.WriteError(w, r, http.StatusForbidden,
+			httpserver.ErrReauth, "recent authentication required")
 	case errors.Is(err, ErrNotOwned):
 		httpserver.WriteError(w, r, http.StatusNotFound,
 			httpserver.ErrNotFound, "monitor or channel not found")

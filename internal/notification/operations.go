@@ -11,9 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Operations (C47): administrative dead-letter controls. These are
-// INTERNAL service functions — no public route binds them yet;
-// Phase 07 adds the authorized/audited caller contract. Every
+// Operations provides internal delivery controls; the admin layer owns
+// the authorized/audited HTTP contract for dead-letter actions. Every
 // mutation preserves event identity: a retry resets the attempt
 // window on the SAME row, never a new event; suppression cascades
 // the causal stream so a RECOVERY can never stand alone.
@@ -184,6 +183,22 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 	}
 	defer tx.Rollback(ctx)
 
+	id, err := o.QueueTestNotificationTx(ctx, tx, ownerID, monitorID, channelID, rate)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// QueueTestNotificationTx composes the intent with the caller's authorization
+// transaction. HTTP callers must hold WithActorLock through this write and
+// commit; authenticating before a separate transaction cannot fence revocation.
+// The standalone variant above remains available to trusted internal callers.
+func (o *Operations) QueueTestNotificationTx(ctx context.Context, tx pgx.Tx,
+	ownerID, monitorID, channelID uuid.UUID, rate TestRate) (uuid.UUID, error) {
 	// 1) ownership + binding under one read.
 	var bound bool
 	var monName string
@@ -267,7 +282,7 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 	payload := fmt.Sprintf(`{"monitor_name":%q,"transition":"TEST"}`,
 		monName)
 	var id uuid.UUID
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO uptime.notification_outbox
 		  (id,user_id,monitor_id,incident_id,channel_id,event_kind,
 		   event_key,predecessor_id,channel_version,safe_payload,state)
@@ -284,9 +299,6 @@ func (o *Operations) QueueTestNotification(ctx context.Context,
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("queue test: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, err
 	}
 	return id, nil
 }

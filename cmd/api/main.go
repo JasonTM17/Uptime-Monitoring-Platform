@@ -141,7 +141,7 @@ func run() error {
 	// Owner channel-test route: recent-auth gated TEST intent queue
 	// (C62). 202 = queued intent, never provider delivery.
 	opsSvc := notification.NewOperations(pool, cfg.Database.QueryTimeout)
-	testHandler := notification.NewTestHandler(opsSvc, pool, svc, csrfMgr,
+	testHandler := notification.NewTestHandler(opsSvc, svc, csrfMgr,
 		notification.DefaultTestRate, cfg.HTTP.MaxJSONBodyBytes, log)
 
 	adminHandler := admin.NewRolesHandler(pool, svc, csrfMgr,

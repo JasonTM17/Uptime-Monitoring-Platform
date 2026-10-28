@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/auth"
+	"github.com/JasonTM17/Uptime-Monitoring-Platform/internal/config"
 )
 
 // gateFor returns a RequireSession stub injecting the real-session
@@ -37,6 +38,114 @@ func (g gateFor) RequireSession(next http.HandlerFunc) http.HandlerFunc {
 func (g gateFor) WithActorLock(_ context.Context, _ auth.Principal,
 	_ func(tx pgx.Tx, u auth.User) error) error {
 	return errors.New("WithActorLock not implemented in test gate")
+}
+
+// lockedGate keeps authentication as a captured middleware snapshot while
+// exercising the real database-backed mutation fence.
+type lockedGate struct {
+	gateFor
+	svc *auth.Service
+}
+
+func (g lockedGate) WithActorLock(ctx context.Context, p auth.Principal,
+	fn func(pgx.Tx, auth.User) error) error {
+	return g.svc.WithActorLock(ctx, p, fn)
+}
+
+func testActorGate(pool *pgxpool.Pool, p auth.Principal) lockedGate {
+	svc := auth.NewService(auth.NewRepository(pool, 3*time.Second), nil,
+		config.AuthConfig{}, 10)
+	return lockedGate{gateFor: gateFor{p}, svc: svc}
+}
+
+// rollbackGate aborts after the intent callback to prove the HTTP write
+// belongs to the authorization transaction rather than a separate commit.
+type rollbackGate struct{ lockedGate }
+
+func (g rollbackGate) WithActorLock(ctx context.Context, p auth.Principal,
+	fn func(pgx.Tx, auth.User) error) error {
+	return g.svc.WithActorLock(ctx, p, func(tx pgx.Tx, u auth.User) error {
+		if err := fn(tx, u); err != nil {
+			return err
+		}
+		return auth.ErrInvalidSession
+	})
+}
+
+func TestOwnNotificationTestIntentRollsBackWithActorTransaction(t *testing.T) {
+	ops, pool := opsFor(t)
+	c := conn(t)
+	f := seedBase(t, c)
+	ch := mkChannel(t, c, f, "VERIFIED", true, true)
+	fresh := time.Minute
+	p := testSession(t, pool, f.userID, &fresh)
+	h := NewTestHandler(ops, rollbackGate{testActorGate(pool, p)}, nil,
+		DefaultTestRate, 1<<16, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/notification-channels/"+ch.String()+"/test",
+		strings.NewReader(`{"monitor_id":"`+f.monID.String()+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.Mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("aborted actor transaction got %d, want 401", rec.Code)
+	}
+	var count int
+	if err := c.QueryRow(context.Background(), `SELECT count(*)
+		FROM uptime.notification_outbox WHERE channel_id=$1`, ch).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("actor rollback left %d persisted intents", count)
+	}
+}
+
+func TestOwnNotificationTestRejectsStaleActor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"revoked session", `UPDATE uptime.sessions SET revoked_at=clock_timestamp() WHERE id=$1`},
+		{"changed security epoch", `UPDATE uptime.users SET security_version=security_version+1 WHERE id=$1`},
+		{"suspended account", `UPDATE uptime.users SET status='DISABLED',disabled_at=clock_timestamp() WHERE id=$1`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops, pool := opsFor(t)
+			c := conn(t)
+			f := seedBase(t, c)
+			ch := mkChannel(t, c, f, "VERIFIED", true, true)
+			fresh := time.Minute
+			p := testSession(t, pool, f.userID, &fresh)
+			// Authentication happened before this committed revocation. The
+			// handler must distrust that snapshot before persisting an intent.
+			id := f.userID
+			if tc.name == "revoked session" {
+				id = p.Session.ID
+			}
+			if _, err := c.Exec(context.Background(), tc.sql, id); err != nil {
+				t.Fatal(err)
+			}
+			h := NewTestHandler(ops, testActorGate(pool, p), nil,
+				DefaultTestRate, 1<<16, nil)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST",
+				"/notification-channels/"+ch.String()+"/test",
+				strings.NewReader(`{"monitor_id":"`+f.monID.String()+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			h.Mux().ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("stale actor got %d, want 401: %s", rec.Code, rec.Body.String())
+			}
+			var count int
+			if err := c.QueryRow(context.Background(), `
+				SELECT count(*) FROM uptime.notification_outbox
+				WHERE channel_id=$1 AND event_kind='TEST'`, ch).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Errorf("stale actor persisted %d TEST intents, want zero", count)
+			}
+		})
+	}
 }
 
 // testSession seeds a sessions row for the user, optionally with a
@@ -75,7 +184,7 @@ func TestOwnNotificationTestRoute(t *testing.T) {
 	fresh := time.Minute
 	p := testSession(t, pool, f.userID, &fresh)
 
-	h := NewTestHandler(ops, pool, gateFor{p}, nil,
+	h := NewTestHandler(ops, testActorGate(pool, p), nil,
 		TestRate{PerChannelCooldown: time.Minute, GlobalOutstanding: 50},
 		1<<16, nil)
 	mux := h.Mux()
