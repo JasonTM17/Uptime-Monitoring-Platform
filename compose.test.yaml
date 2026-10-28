@@ -118,7 +118,7 @@ services:
       # Exact-origin allowlist: the testapp API origin (script/API
       # calls) and the vite dev-server origin (browser lane). Both
       # are loopback-only and disposable.
-      TRUSTED_ORIGINS: "http://localhost:18080,http://localhost:5173"
+      TRUSTED_ORIGINS: "http://localhost:${ACCEPT_API_PORT:-18080},http://localhost:5173"
       METRICS_ENABLED: "true"
       # Headroom for harness registration/login volume from the one
       # docker gateway source; the fixed-window limiter code path is
@@ -126,7 +126,7 @@ services:
       REGISTER_IP_ATTEMPTS_PER_MIN: "100"
       LOGIN_IP_ATTEMPTS_PER_MIN: "100"
     ports:
-      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:${ACCEPT_API_PORT:-18080}:8080"
     networks: [control, publicnet]
 
   target:
@@ -144,4 +144,4 @@ services:
     ports:
       # Mode control plane — the :80 check listener is reachable only
       # on publicnet, exactly like a real public target.
-      - "127.0.0.1:19080:9080"
+      - "127.0.0.1:${ACCEPT_CONTROL_PORT:-19080}:9080"
