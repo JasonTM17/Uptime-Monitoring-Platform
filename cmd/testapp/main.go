@@ -172,7 +172,7 @@ func run() error {
 	})
 	anaHandler := analytics.NewHandler(anaSvc, svc, log)
 	opsSvc := notification.NewOperations(pool, cfg.Database.QueryTimeout)
-	testHandler := notification.NewTestHandler(opsSvc, pool, svc, csrfMgr,
+	testHandler := notification.NewTestHandler(opsSvc, svc, csrfMgr,
 		notification.DefaultTestRate, cfg.HTTP.MaxJSONBodyBytes, log)
 	adminHandler := admin.NewRolesHandler(pool, svc, csrfMgr,
 		cfg.HTTP.MaxJSONBodyBytes, admin.QuotaCeilings{

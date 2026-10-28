@@ -37,7 +37,8 @@ suites delete/seed shared tables. Always serialize with `-p 1`:
 
 ```sh
 go test -p 1 -count=1 -tags=integration \
-  ./internal/engine ./internal/incident ./internal/notification
+  ./internal/auth ./internal/monitor ./internal/engine ./internal/incident \
+  ./internal/notification ./internal/admin ./internal/analytics
 ```
 
 ## OpenAPI contract gate
@@ -63,11 +64,19 @@ destination verification (masked output, never browser-writable), and
 atomic monitor→channel binding (ineligible ids fail the whole set,
 same-generation writers elect exactly one), plus the full HTTP auth
 flow (csrf → register → login → me → sessions → logout) through a real
-`httptest` server. Fixture rows use unique emails and are deleted by
-the test — no blanket truncate of unrelated rows.
+`httptest` server. Some suites use unique fixture identities, but analytics
+cleanup deliberately DELETEs whole domain tables, including users, incidents,
+outbox and audit rows. These suites are destructive: use a dedicated disposable
+database with no developer, shared or production data. Unique emails do not
+make an otherwise shared database safe. See
+[analytics cleanup](../internal/analytics/rollup_integration_test.go).
 
 CI runs the same suite in the `go-integration` job (postgres:17.11
 service + pinned `migrate/migrate:v4.20.1` schema step).
+
+Analytics is a separate integration package: statistics, denominator, rollup
+and retention checks must be included explicitly when selecting package paths.
+A green monitor/notification-only run does not cover those rules.
 
 ## What each check proves
 
@@ -79,7 +88,7 @@ service + pinned `migrate/migrate:v4.20.1` schema step).
 | `docker compose config --quiet` | compose syntax + env interpolation | containers are healthy |
 | `compose ps` healthy | readiness probe (`pg_isready`) passes | migration applied / app works |
 | secret scanner | staged BLOBS (`git show :path`) match no secret pattern + no sensitive filenames; blocks commits via pre-commit hook | history is clean, unstaged content, binary blobs, and entropy-based secrets it has no rule for |
-| `--race` (Linux `go-test` profile) | data-race absence under Linux | races on Windows host |
+| `--race` | no race detected in executed cases on that OS/runtime | every interleaving, another OS, or distributed correctness |
 
 ## CI honesty
 

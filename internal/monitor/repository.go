@@ -410,6 +410,9 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 				`UPDATE uptime.monitors SET
 				   name=$3, target_url=$4, interval_seconds=$5,
 				   timeout_seconds=$6, expected_status=$7,
+				   health=CASE WHEN health='DOWN' THEN 'UNKNOWN' ELSE health END,
+				   failure_streak=CASE WHEN health='DOWN' THEN 0 ELSE failure_streak END,
+				   success_streak=CASE WHEN health='DOWN' THEN 0 ELSE success_streak END,
 				   generation=generation+1, updated_at=now()
 				 WHERE id=$1 AND user_id=$2
 				 RETURNING `+monitorCols,
@@ -439,8 +442,10 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 					return Monitor{}, err
 				}
 			}
-			// Config change closes any open incident  -  honestly, as
-			// CONFIG_CHANGED, never as observed recovery.
+			// Config change closes the incident as CONFIG_CHANGED, never
+			// as observed recovery. Reset stale DOWN above so continued
+			// failures can establish a new incident under the new config;
+			// preserve non-DOWN streaks just as the resume path does.
 			if _, err := (incident.Repository{}).CloseIncident(ctx, tx,
 				id, nil, incident.ReasonConfigChanged); err != nil {
 				return Monitor{}, err
@@ -451,8 +456,9 @@ func (r *Repository) UpdateMonitorTx(ctx context.Context, tx pgx.Tx, ownerID, id
 
 // SetMonitorPausedTx flips the lifecycle flag under the fence inside
 // the caller's transaction. Pause never fabricates DOWN and resume
-// never fabricates UP or a sample — health, streaks, and sequence
-// fences pass through untouched. Resume sets next_check_at=now():
+// never fabricates UP or a sample. Resume clears stale DOWN and its streaks
+// to UNKNOWN so a fresh incident can be established; non-DOWN evidence and
+// sequence fences stay intact. Resume sets next_check_at=now():
 // eligibility only, the durable admission budget still gates the
 // actual check (no check-now privilege).
 func (r *Repository) SetMonitorPausedTx(ctx context.Context, tx pgx.Tx, ownerID, id uuid.UUID,

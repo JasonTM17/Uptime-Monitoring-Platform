@@ -211,6 +211,7 @@ describe("channels page", () => {
     await user.type(await screen.findByLabelText(/channel label/i), "new");
     await user.click(screen.getByRole("button", { name: /^create$/i }));
     expect(await screen.findByText(/pending channel limit reached/i)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/deleting pending channels does not free this limit/i);
     const post = posted.find((p) => p.url === "/api/notification-channels");
     expect(post?.body).toEqual({ label: "new" });
   });
